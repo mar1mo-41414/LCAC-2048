@@ -2,15 +2,33 @@
 
 [日本語 README →](README.md)
 
-A tweak (dylib) that plays the regular mode of **2048** (`com.ketchapp.2048`) on [LiveContainer](https://github.com/LiveContainer/LiveContainer).
+A tweak (dylib) that plays the regular mode of **2048** (`com.ketchapp.2048`) on
+[LiveContainer](https://github.com/LiveContainer/LiveContainer).
+It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is not guaranteed.**
 
-- **Automatic moves** — searches up to four moves ahead. Reaching 2048 is not guaranteed.
+- **Automatic moves** — scores legal moves using empty cells, monotonicity, a snake pattern and more.
 - **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX`.
-- Targets the regular 4×4 game in 2048 **4.0.8**. Auto-play and one 2048 achievement have been observed on a physical device with v3.
+- **Visible state** — the button shows `THINK` / `STALE` / `PAUSE` and so on.
+  What each one means: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) (Japanese).
+- Targets the regular 4×4 game in 2048 **4.0.8** only. Challenge and multiplayer modes are not supported.
+
+## Status
+
+| Item | State |
+| --- | --- |
+| Real device (LiveContainer) | Auto-play confirmed with v3; one 2048 achievement observed |
+| 2048 version | 4.0.8 only (others untested) |
+| Game mode | Regular game (4×4) only |
+| Ads and popups | Not detected (turn AUTO off and on again by hand) |
+| Host simulation | Best tiles 2048 / 4096 / 2048 over 3 runs |
+
+The simulation uses very few runs and says nothing about the success rate on a device.
+Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.
 
 ## Download
 
-Get [`Auto2048.dylib`](Auto2048.dylib) from this repository. The game and its IPA are not included.
+Get [`Auto2048.dylib`](Auto2048.dylib) from this repository.
+The game and its IPA are not included.
 
 ## Usage
 
@@ -25,15 +43,24 @@ Get [`Auto2048.dylib`](Auto2048.dylib) from this repository. The game and its IP
 | Long press | Cycle speed (`x1` → `x2` → `x4` → `MAX`) |
 
 - Only the speed is saved; auto-play always starts OFF.
-- `THINK` means searching, `PAUSE` means the game is paused, and `STALE` means the board changed and the search result was discarded.
+- `THINK` means searching, `PAUSE` means the game is paused, and `STALE` means the board changed and the
+  search result was discarded. All three are normal.
 - The 2048 achievement screen shows `PAUSE`. If AUTO remains ON, pressing Continue resumes auto-play.
+
+### When it does not work
+
+A missing button, a stuck `I_CLASS` / `F_EXC`, a halt at an ad, and similar symptoms are covered in
+**[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** (Japanese): what each state means and what to do.
 
 ## Notes
 
 - Ads and popups are not reliably detected. Turn AUTO OFF before they appear and resume after closing them.
+  To remove ads, use something like [LCAB](https://github.com/mar1mo-41414/LCAB).
 - Auto-play changes scores and saved data. Back up your save first if needed.
 - Challenge and multiplayer modes, non-4×4 boards, automatic restart, and automatic popup handling are not supported.
-- The tweak relies on internal game classes and methods, so game or LiveContainer updates may break it. Follow your environment's instructions for re-signing when needed.
+- The tweak relies on internal game classes and methods, so game or LiveContainer updates may break it.
+  Follow your environment's instructions for re-signing when needed.
+- The game, its extracted data and saves are not part of this repository.
 
 ## Build
 
@@ -45,8 +72,34 @@ make FINALPACKAGE=1
 
 The generated `Auto2048.dylib` is usually under `.theos/obj/`. Sign it as required by your environment.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical details and [HISTORY.md](HISTORY.md) for the development log (both in Japanese).
+## Tests
+
+Theos is not needed; a host C compiler is enough.
+
+```bash
+make test        # unit tests + a 10,000-board move comparison
+make simulate    # quick simulation (3 games × 5,000 moves; takes a few minutes)
+```
+
+The same checks run in GitHub Actions (`.github/workflows/tests.yml`).
+`Engine.m` / `Controller.m` need the iOS SDK and a device, so CI does not build them.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it works (game objects, search, threading, states)
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — states and symptom-by-symptom fixes
+- [HISTORY.md](HISTORY.md) — development log (analysis, rejected ideas, device results)
+- [AGENTS.md](AGENTS.md) — instructions for AI agents working in this repository
+
+The documents under `docs/` are written in Japanese.
+
+## Sister projects
+
+- [LCAC-A](https://github.com/mar1mo-41414/LCAC-A) — an auto-clear tweak for the puzzle game Arrows;
+  the UI and IL2CPP handling here follow it.
+- [LCAB](https://github.com/mar1mo-41414/LCAB) — an ad-blocking dylib for LiveContainer.
 
 ## License
 
-The code in this repository is licensed under the [MIT License](LICENSE). The game and third-party software remain subject to their own rights and licenses.
+The code in this repository is licensed under the [MIT License](LICENSE).
+The game and third-party software remain subject to their own rights and licenses.

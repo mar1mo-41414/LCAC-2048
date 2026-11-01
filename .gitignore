@@ -1,15 +1,31 @@
-# Theos and other local build output
+# ビルド出力 (Theos / テスト)
 .theos/
 packages/
+build/
 *.o
 *.dSYM/
-.DS_Store
 
-# Never include the game, extracted game data, saves or private information
+# 配布物: リポジトリ直下の Auto2048.dylib だけを追跡する。
+# それ以外の dylib (ローカルビルド) は入れない。
+*.dylib
+!Auto2048.dylib
+
+# 作業メモ (追跡しない)
+start-note.md
+
+# ゲーム本体・抽出データ・セーブ・個人情報は絶対に入れない
 *.ipa
 *.xcarchive/
 global-metadata.dat
-UnityFramework
+UnityFramework/
 *.log
 .env
 .env.*
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

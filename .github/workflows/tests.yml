@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Solver tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests and 10,000-board comparison
+        run: make test
+
+  simulate:
+    name: Simulation (smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run a short simulation
+        run: make simulate SIM_GAMES=1 SIM_MOVES=1000
