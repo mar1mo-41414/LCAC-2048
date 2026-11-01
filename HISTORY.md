@@ -4,12 +4,17 @@
 
 ## 2026-11-01 リリース運用の自動化 (vX.X タグ)
 
-- タグを **`vX.X`** 形式 (必要なら `vX.X.X`) に統一し、タグを push すると Release が作られるようにした。
-  `.github/workflows/release.yml` がリポジトリ直下の `Auto2048.dylib` をアセットとして添付し、本文に SHA-256 を追記する。
-  リリースノートはコミットから自動生成する。
-- 配布物はリポジトリ直下の `Auto2048.dylib` を正とし、README のダウンロード欄は Releases を案内する。
-  タグ名が `vX.X` 形式でないとワークフローは失敗し、Release は作られない。
-- 既存の `v3` タグは形式が違うため対象外 (すでに公開済み)。次のリリースから `v3.1` のように打つ。
+- タグを **`vX.X`** 形式 (必要なら `vX.X.X`) に統一し、タグを push すると Release が並ぶようにした。
+  `.github/workflows/release.yml` が macOS ランナーで Theos を用意して `make test` → `make FINALPACKAGE=1` を実行し、
+  ビルドした `Auto2048.dylib` をアセットとして添付、本文に SHA-256 を追記する。リリースノートはコミットから自動生成する。
+- **バイナリはリポジトリに入れない**方針にした。`Auto2048.dylib` を削除し、`.gitignore` で `*.dylib` を無視する。
+  配布物は Releases のアセットのみ。
+- Theos のセットアップを composite action (`.github/actions/setup-theos`) に切り出し、iOS SDK は
+  sparse-checkout で 1 つだけ取得してキャッシュする。`tests.yml` にビルド確認のジョブも追加した
+  (これまで CI では Objective-C 側をビルドしていなかった)。
+- タグ名が `vX.X` 形式でないとワークフローは失敗し、Release は作られない。
+  既存の `v3` タグは形式が違うため対象外 (すでに公開済み)。次のリリースから `v3.1` のように打つ。
+- 未確認: 実際のタグ push による CI ビルドはまだ実行していない (初回のリリースで確認する)。
 
 ## 2026-11-01 ドキュメントとリポジトリ構成の整理
 

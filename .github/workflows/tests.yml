@@ -14,6 +14,24 @@ jobs:
       - name: Unit tests and 10,000-board comparison
         run: make test
 
+  build:
+    name: Build tweak
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-theos
+      - name: Build the dylib
+        run: make FINALPACKAGE=1
+      - name: Check the dylib
+        run: |
+          dylib=$(find .theos -name 'Auto2048.dylib' -type f | head -1)
+          if [ -z "$dylib" ]; then
+            echo "::error::Auto2048.dylib がビルドされていません"
+            exit 1
+          fi
+          ls -l "$dylib"
+
   simulate:
     name: Simulation (smoke)
     runs-on: ubuntu-latest

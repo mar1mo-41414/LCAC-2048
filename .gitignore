@@ -5,10 +5,8 @@ build/
 *.o
 *.dSYM/
 
-# 配布物: リポジトリ直下の Auto2048.dylib だけを追跡する。
-# それ以外の dylib (ローカルビルド) は入れない。
+# バイナリは入れない (配布は Releases のアセットのみ。CI がタグでビルドする)
 *.dylib
-!Auto2048.dylib
 
 # 作業メモ (追跡しない)
 start-note.md

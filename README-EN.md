@@ -72,6 +72,9 @@ make FINALPACKAGE=1
 
 The generated `Auto2048.dylib` is usually under `.theos/obj/`. Sign it as required by your environment.
 
+Pushing a `vX.X` tag makes GitHub Actions build the tweak on macOS and attach the dylib to the release.
+No binary is kept in the repository; releases are the only place the dylib is distributed.
+
 ## Tests
 
 Theos is not needed; a host C compiler is enough.
