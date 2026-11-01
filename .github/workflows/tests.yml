@@ -28,10 +28,9 @@ jobs:
       - name: Report build errors
         if: failure()
         run: |
-          grep -E "error:|Error [0-9]" /tmp/theos-build.log | head -n 5 | while IFS= read -r line; do
+          tail -n 10 /tmp/theos-build.log | while IFS= read -r line; do
             echo "::error::$line"
           done
-          tail -n 20 /tmp/theos-build.log || true
       - name: Check the dylib
         run: |
           dylib=$(find .theos -name 'Auto2048.dylib' -type f | head -1)
