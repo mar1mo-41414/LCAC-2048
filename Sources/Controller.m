@@ -4,7 +4,9 @@
 #import "Solver.h"
 
 static NSString *const SpeedKey = @"Auto2048.speed";
-static const double Intervals[] = {0.9, 0.65, 0.45, 0.30};
+// Minimum delay after a move, in seconds, for x1 / x2 / x4 / MAX.
+// The real interval is longer when the search or the tile animation takes time.
+static const double Intervals[] = {0.45, 0.32, 0.22, 0.15};
 static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
 
 @interface Auto2048Controller : NSObject
