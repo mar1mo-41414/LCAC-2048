@@ -1,0 +1,16 @@
+name: Solver tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test solver
+        run: |
+          cc -O2 -Wall -Wextra tests/solver_test.c Sources/Solver.c -lm -o /tmp/2048-test
+          /tmp/2048-test
+          cc -O2 -Wall -Wextra tests/internal_test.c -lm -o /tmp/2048-internal
+          /tmp/2048-internal

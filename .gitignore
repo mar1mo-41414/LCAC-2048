@@ -1,0 +1,15 @@
+# Theos and other local build output
+.theos/
+packages/
+*.o
+*.dSYM/
+.DS_Store
+
+# Never include the game, extracted game data, saves or private information
+*.ipa
+*.xcarchive/
+global-metadata.dat
+UnityFramework
+*.log
+.env
+.env.*
