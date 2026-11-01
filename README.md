@@ -25,7 +25,7 @@
 
 ## ダウンロード
 
-このリポジトリの [`Auto2048.dylib`](Auto2048.dylib) を取得してください。
+[Releases](../../releases/latest) から `Auto2048.dylib` を取得してください。
 ゲーム本体・IPA は含まれていません。
 
 ## 使い方

@@ -27,7 +27,7 @@ Only one device (the author's) has been tested; reports for other devices and ve
 
 ## Download
 
-Get [`Auto2048.dylib`](Auto2048.dylib) from this repository.
+Get `Auto2048.dylib` from [Releases](../../releases/latest).
 The game and its IPA are not included.
 
 ## Usage

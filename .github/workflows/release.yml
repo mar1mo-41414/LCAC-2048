@@ -1,0 +1,45 @@
+name: Release
+
+# vX.X / vX.X.X 形式のタグを push すると GitHub Release を作成する。
+# リポジトリ直下の Auto2048.dylib をアセットとして添付し、本文に SHA-256 を追記する。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag format
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::タグは vX.X 形式にしてください (例: v3.1)。受け取ったタグ: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f Auto2048.dylib ]; then
+            echo "::error::Auto2048.dylib がリポジトリ直下にありません"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" Auto2048.dylib \
+            --title "Auto2048 $GITHUB_REF_NAME" --generate-notes
+
+      - name: Append SHA-256 to the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(sha256sum Auto2048.dylib | awk '{print $1}')
+          body=$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)
+          gh release edit "$GITHUB_REF_NAME" \
+            --notes "$(printf '%s\n\nSHA-256: `%s`\n' "$body" "$sha")"

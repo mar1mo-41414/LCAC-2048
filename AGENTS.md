@@ -17,7 +17,7 @@
 | 目的 | 2048 の通常ゲーム (4×4) を自動で指す。2048 の到達は保証しない |
 | 対象アプリ | 2048 **4.0.8** (`com.ketchapp.2048`)、Unity / IL2CPP |
 | 実行環境 | LiveContainer (脱獄不要)。tweak フォルダに dylib を置いて使う |
-| 成果物 | `Auto2048.dylib` (リポジトリ直下で配布。`v3` の Release も用意してあり、アセットの添付後に Releases 配布へ移行する) |
+| 成果物 | リポジトリ直下の `Auto2048.dylib`。**`vX.X` タグを push すると Actions が Release を作り、このファイルを添付する** |
 | ビルド | [Theos](https://theos.dev) (`make FINALPACKAGE=1`) |
 | テスト | ホストの C コンパイラだけで動く (`make test` / `make simulate`)。CI は `.github/workflows/tests.yml` |
 | 含めないもの | ゲーム本体・IPA・抽出データ (metadata / UnityFramework)・セーブ・スクリーンショット・ログ |
@@ -29,8 +29,8 @@
 - **ゲームのファイルを入れない。** IPA、`global-metadata.dat`、`UnityFramework`、抽出したアセット、セーブデータ、
   それらのスクリーンショットを追加しない (`.gitignore` でも除外している)。
 - **秘密情報を書かない。** 証明書、プロビジョニング、Apple ID、署名用のパスワードなど。
-- **配布用の `Auto2048.dylib` 以外のバイナリをコミットしない。** ローカルのビルド出力は `.gitignore` 済み。
-  Releases 配布へ切り替えたら、リポジトリ直下の dylib は外す (README と `AGENTS.md` の記述も合わせる)。
+- **配布用の `Auto2048.dylib` 以外のバイナリをコミットしない。** ローカルのビルド出力は `.gitignore` 済み
+  (`*.dylib` を無視し、`!Auto2048.dylib` だけ追跡する)。
 - **実機で確認していない挙動を「確認済み」と書かない。** 未確認なら「未確認」と明記する。
 - **測っていない数字を書かない。** 到達率・速度・成功率は、測った条件と試行回数と一緒に書く。
 - ゲームの解析結果 (クラス名・メソッド名) は、実際に IL2CPP ダンプで確認したものだけを書く。
@@ -103,3 +103,21 @@ make FINALPACKAGE=1                        # Theos が必要。.theos/obj/ に d
 4. 実機で確認した → `HISTORY.md` に日付・端末・結果を追記 (未確認ならそう書く)
 5. ゲーム本体・抽出データ・セーブ・バイナリ・秘密情報を追加していない (`git status` で確認)
 6. `README.md` と `README-EN.md` の内容がずれていない
+7. リリースする場合は `HISTORY.md` を更新し、`Auto2048.dylib` を差し替えてから `vX.X` タグを打つ (下記)
+
+## 8. リリース
+
+- タグは **`vX.X`** (必要なら `vX.X.X`)。例: `v3.1`
+- リポジトリ直下の `Auto2048.dylib` を更新してコミットしてから、タグを打って push する。
+
+  ```bash
+  git tag v3.1
+  git push origin v3.1
+  ```
+
+- push すると `.github/workflows/release.yml` が Release を作成し、`Auto2048.dylib` を添付して本文に SHA-256 を追記する。
+  リリースノートはそのタグまでのコミットから自動生成される (`--generate-notes`)。
+  手で補足したいときは、Release 作成後に本文を編集する。
+- タグ名が形式に合わないとワークフローは失敗し、Release は作られない。既存の `v3` は形式が違うため対象外 (作成済み)。
+- リリース本文には、対応するゲームのバージョン (現在は 2048 4.0.8) と実機で確認したことを書く。
+  未確認のことは「未確認」と明記する。
