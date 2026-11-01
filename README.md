@@ -25,7 +25,7 @@
 
 ## ダウンロード
 
-このリポジトリの [`Auto2048.dylib`](Auto2048.dylib) を取得してください。
+[Releases](../../releases/latest) から `Auto2048.dylib` を取得してください。
 ゲーム本体・IPA は含まれていません。
 
 ## 使い方
@@ -69,6 +69,9 @@ make FINALPACKAGE=1
 ```
 
 生成された `Auto2048.dylib` は通常 `.theos/obj/` 以下にあります。環境に応じて署名してください。
+
+`vX.X` 形式のタグを push すると、GitHub Actions が macOS 上でビルドし、その dylib を Release に添付します。
+リポジトリにバイナリは置いていません (配布は Releases のアセットのみ)。
 
 ## テスト
 

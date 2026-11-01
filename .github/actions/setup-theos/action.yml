@@ -1,0 +1,58 @@
+name: Setup Theos
+description: Theos と最新の iOS SDK を用意する (ワークフロー間で共有。キャッシュあり)
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Theos
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/theos
+        key: theos-${{ runner.os }}-v1
+
+    - name: Install ldid (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v ldid >/dev/null 2>&1; then
+          echo "ldid: $(command -v ldid)"
+          exit 0
+        fi
+        case "$(uname -m)" in
+          arm64) asset=ldid_macosx_arm64 ;;
+          *) asset=ldid_macosx_x86_64 ;;
+        esac
+        mkdir -p "$RUNNER_TEMP/bin"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/bin/ldid" \
+          "https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/$asset"
+        chmod +x "$RUNNER_TEMP/bin/ldid"
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/bin/ldid" 2>&1 | head -1 || true
+
+    - name: Install Theos and the iOS SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        THEOS="$GITHUB_WORKSPACE/theos"
+        echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+
+        if [ ! -d "$THEOS/makefiles" ]; then
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+        fi
+
+        if ! ls "$THEOS"/sdks/iPhoneOS*.sdk >/dev/null 2>&1; then
+          # SDK は 1 つだけ sparse-checkout する (リポジトリ全体は数百 MB)
+          rm -rf /tmp/theos-sdks
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/theos-sdks
+          version=$(git -C /tmp/theos-sdks ls-tree --name-only HEAD \
+            | grep -E '^iPhoneOS[0-9.]+\.sdk$' \
+            | sed 's/^iPhoneOS//; s/\.sdk$//' \
+            | sort -n -t. -k1,1 -k2,2 | tail -1)
+          git -C /tmp/theos-sdks sparse-checkout set "iPhoneOS$version.sdk"
+          mkdir -p "$THEOS/sdks"
+          cp -R "/tmp/theos-sdks/iPhoneOS$version.sdk" "$THEOS/sdks/"
+          echo "iOS SDK: iPhoneOS$version.sdk"
+        fi
+
+        ls -d "$THEOS"/sdks/iPhoneOS*.sdk
