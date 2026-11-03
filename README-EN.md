@@ -22,12 +22,16 @@ It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is 
 
 | Item | State |
 | --- | --- |
-| Real device (LiveContainer) | Auto-play confirmed with v3; one 2048 achievement observed |
+| Real device (LiveContainer) | Auto-play confirmed with v3.5; **8,192 reached** (2026-11-03), 4,096 several times |
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
 | Host simulation (2 / 4 spawns) | 8 of 16 runs reached 4096 (mean best tile 2,976) |
 | Host simulation (all spawns are 4) | 3 of 8 runs reached 16,384, four reached 8,192, one 4,096 |
+
+v3.5 forces every spawned tile to be a 4, which gains one tier (4,096 in a 2-spawn game is
+worth 8,192 in a 4-spawn game). The tiles on screen still read 2: the game's own arithmetic runs on
+4s, which is why two "2"s merge into an 8. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 The simulation uses very few runs and says nothing about the success rate on a device.
 The deeper search makes each move slower than in v3.3, especially near the end of a game.
