@@ -170,6 +170,8 @@ static BOOL initEngine(void) {
         return NO;
     }
 
+    // Printed as literal text (not an argument) so that os_log shows it.
+    NSLog(@"[2048-auto] tweak v3.9: 2->4 rewrite, board log, view redraw");
     NSLog(@"[2048-auto] IL2CPP ready");
     ready = YES;
     return YES;
