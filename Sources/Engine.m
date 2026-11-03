@@ -195,6 +195,7 @@ static BOOL haveExpected;
 // work (write, read back, compare), and switched off if 2s come back.
 static const M *setCellMethod;
 static int converting;
+static int convertingStrikes;
 
 static const M *findSetter(void) {
     static const char *names[] = {"SetCellValue", "SetCell", "SetValue", "SetTileValue", "SetTile", "SetNumber"};
@@ -399,7 +400,9 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     box = call(getSize, grid, NULL);
     if (failedInvocation || !box || *(int32_t *)unbox(box) != 4) return @"SIZE";
 
+    int32_t board[16];
     int twos = 0;
+    int firstTwo = -1;
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
             Vec2 v = {x, y};
@@ -410,28 +413,37 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (value < 0 || value == 1 || value > 536870912 || (value && (value & (value - 1)))) return @"DATA";
             if (value == 2) {
                 twos++;
-                // The game still spawns 2s; replace them with 4s. writeCell
-                // reads the cell back, so the board reported below is real.
-                if (converting) {
-                    if (writeCell(grid, x, y, 4))
-                        value = 4;
-                    else {
-                        converting = 0;
-                        solver_set_spawn_value(0);
-                        NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
-                    }
-                }
+                if (firstTwo < 0) firstTwo = x + 4 * y;
             }
-            out->board[x + 4 * y] = value;
+            board[x + 4 * y] = value;
         }
     }
-    // With rewriting on, at most one 2 can appear per move. Seeing three means
-    // the game is putting our 4s back, so stop instead of fighting it.
-    if (converting && twos >= 3) {
-        converting = 0;
-        solver_set_spawn_value(0);
-        NSLog(@"[2048-auto] 2s came back after rewriting; spawns stay 2/4");
+    // The game still spawns 2s; replace the one it just added with a 4. Only a
+    // single 2 is rewritten, because that is what one move can produce. More
+    // than that means either a board we attached to mid-game or the game
+    // putting our 4s back, so nothing is written and we watch a few moves
+    // before giving up. writeCell reads the cell back, so the board reported
+    // below is always what the grid really holds.
+    if (converting) {
+        if (twos <= 1) {
+            convertingStrikes = 0;
+            if (twos == 1) {
+                int at = firstTwo;
+                if (writeCell(grid, at % 4, at / 4, 4))
+                    board[at] = 4;
+                else {
+                    converting = 0;
+                    solver_set_spawn_value(0);
+                    NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
+                }
+            }
+        } else if (++convertingStrikes >= 3) {
+            converting = 0;
+            solver_set_spawn_value(0);
+            NSLog(@"[2048-auto] 2s came back after rewriting; spawns stay 2/4");
+        }
     }
+    for (int i = 0; i < 16; i++) out->board[i] = board[i];
 
     probeSpawn(mgr, grid);
     if (fourOwner == FIELD_GAME_MANAGER) applyFour(FIELD_GAME_MANAGER, mgr);
