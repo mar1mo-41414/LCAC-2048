@@ -64,12 +64,17 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 新しいタイルを 4 に固定する機能は、ゲーム側の「4 の出る確率」を探して書き換えています。
 効かないときは、無理に動かさず 2 / 4 のまま続行します。
 
-- ログに `spawn forced to 4 via GameManager._xxxx` が出ていれば書き換えに成功しています。
-- `no four-chance field found; spawns stay 2/4` が出ている場合は、この版のゲームには
-  確率のフィールドが見つからなかった、という意味です。続けて `GameManager method: ...` の行が出るので、
-  その抜粋を Issue に貼ってもらえると、次の版でメソッドを直接差し替える方向に進めます。
-- `a 2 spawned after forcing; reverting to 2/4` が出た場合は、書き換えたフィールドが
-  4 の確率ではなかったため、自動で元に戻しています (ゲームは壊れません)。
+ログ (`[2048-auto]`) で、次のどれが出たかを見てください。
+
+- `spawn forced to 4 via GameManager._xxxx` — 確率フィールドを見つけて書き換えました。
+- `grid setter works; spawned 2s are turned into 4s` — フィールドは無かったので、
+  出たタイルを 4 に書き換える方式で動いています。
+- `no four-chance field and no grid setter; spawns stay 2/4` — この版ではどちらの手も使えず、
+  従来通り 2 / 4 で動きます。続く `GameManager method: ...` / `Grid field: ...` の行を
+  Issue に貼ってもらえると、次の版で別の手を試せます。
+- `2s came back after rewriting; spawns stay 2/4` / `grid write failed; spawns stay 2/4` —
+  書き換えが効かなかったため、自動で 2 / 4 に戻しました (ゲームは壊れません)。
+- `a 2 spawned after forcing; reverting to 2/4` — 確率フィールドの推測が外れたため戻しました。
 
 ### 2048 の達成画面で止まる
 

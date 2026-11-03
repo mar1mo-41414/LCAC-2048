@@ -190,6 +190,43 @@ static int fourProbeDone, fourSpawns, fourReverted;
 static int32_t expected[16];
 static BOOL haveExpected;
 
+// If no chance field exists, the other route is to rewrite the cell the game
+// just filled: a spawned 2 becomes a 4. Only used when the setter is proven to
+// work (write, read back, compare), and switched off if 2s come back.
+static const M *setCellMethod;
+static int converting;
+static int convertingStrikes;
+
+static const M *findSetter(void) {
+    static const char *names[] = {"SetCellValue", "SetCell", "SetValue", "SetTileValue", "SetTile", "SetNumber"};
+    for (int i = 0; i < 6; i++) {
+        const M *m = method(gridClass, names[i], 2);
+        if (m) return m;
+    }
+    return NULL;
+}
+
+// Writes v into (x, y) and reads it back. Returns NO unless the grid really
+// holds the new value, so a wrong guess can never desync the board.
+static BOOL writeCell(void *grid, int x, int y, int32_t v) {
+    if (!setCellMethod || !grid) return NO;
+    Vec2 c = {x, y};
+    int32_t val = v;
+    void *par[] = {&c, &val};
+    BOOL saved = failedInvocation;
+    failedInvocation = NO;
+    call(setCellMethod, grid, par);
+    BOOL ok = NO;
+    if (!failedInvocation) {
+        void *back[] = {&c};
+        void *box = call(getCell, grid, back);
+        ok = box && !failedInvocation && *(int32_t *)unbox(box) == v;
+    }
+    failedInvocation = saved;
+    return ok;
+}
+
+
 static BOOL containsFour(const char *s) {
     if (!s) return NO;
     for (const char *p = s; *p; p++) {
@@ -256,6 +293,20 @@ static BOOL interestingName(const char *n) {
     return NO;
 }
 
+// Field names and types, for the next round of guesswork when neither route
+// works. Names may be hidden ("<private>") in release builds.
+static void dumpFieldNames(C *c, const char *label) {
+    if (!c || !class_fields || !field_name || !field_type || !type_get_name) return;
+    void *it = NULL;
+    const F *f;
+    while ((f = class_fields(c, &it))) {
+        const char *n = field_name(f);
+        const void *t = field_type(f);
+        const char *tn = t ? type_get_name(t) : NULL;
+        NSLog(@"[2048-auto] %s field: %s %s", label, n ? n : "?", tn ? tn : "?");
+    }
+}
+
 static void dumpMethodNames(C *c, const char *label) {
     if (!c || !class_methods || !method_name) return;
     void *it = NULL;
@@ -272,12 +323,31 @@ static void probeSpawn(void *mgr, void *grid) {
     if (!fourOwner) {
         dumpMethodNames(gmClass, "GameManager");
         dumpMethodNames(gridClass, "Grid");
+        setCellMethod = findSetter();
+        // Prove the setter by writing a cell's own value back before using it.
+        BOOL saved = failedInvocation;
+        failedInvocation = NO;
+        BOOL ok = NO;
+        for (int i = 0; i < 16 && setCellMethod && !ok; i++) {
+            int x = i % 4, y = i / 4;
+            Vec2 c = {x, y};
+            void *par[] = {&c};
+            void *box = call(getCell, grid, par);
+            if (!box || failedInvocation) break;
+            int32_t v = *(int32_t *)unbox(box);
+            if (v > 0 && writeCell(grid, x, y, v)) ok = YES;
+        }
+        failedInvocation = saved;
+        if (ok) {
+            converting = 1;
+            solver_set_spawn_value(4);
+            NSLog(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
+        } else {
+            NSLog(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
+            dumpFieldNames(gmClass, "GameManager");
+            dumpFieldNames(gridClass, "Grid");
+        }
     }
-    if (!fourOwner) {
-        NSLog(@"[2048-auto] no four-chance field found; spawns stay 2/4");
-        return;
-    }
-    solver_set_spawn_value(4);
 }
 
 static void revertFour(void *mgr, void *grid) {
@@ -330,6 +400,9 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     box = call(getSize, grid, NULL);
     if (failedInvocation || !box || *(int32_t *)unbox(box) != 4) return @"SIZE";
 
+    int32_t board[16];
+    int twos = 0;
+    int firstTwo = -1;
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
             Vec2 v = {x, y};
@@ -338,9 +411,39 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (failedInvocation || !box) return @"ERR";
             int32_t value = *(int32_t *)unbox(box);
             if (value < 0 || value == 1 || value > 536870912 || (value && (value & (value - 1)))) return @"DATA";
-            out->board[x + 4 * y] = value;
+            if (value == 2) {
+                twos++;
+                if (firstTwo < 0) firstTwo = x + 4 * y;
+            }
+            board[x + 4 * y] = value;
         }
     }
+    // The game still spawns 2s; replace the one it just added with a 4. Only a
+    // single 2 is rewritten, because that is what one move can produce. More
+    // than that means either a board we attached to mid-game or the game
+    // putting our 4s back, so nothing is written and we watch a few moves
+    // before giving up. writeCell reads the cell back, so the board reported
+    // below is always what the grid really holds.
+    if (converting) {
+        if (twos <= 1) {
+            convertingStrikes = 0;
+            if (twos == 1) {
+                int at = firstTwo;
+                if (writeCell(grid, at % 4, at / 4, 4))
+                    board[at] = 4;
+                else {
+                    converting = 0;
+                    solver_set_spawn_value(0);
+                    NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
+                }
+            }
+        } else if (++convertingStrikes >= 3) {
+            converting = 0;
+            solver_set_spawn_value(0);
+            NSLog(@"[2048-auto] 2s came back after rewriting; spawns stay 2/4");
+        }
+    }
+    for (int i = 0; i < 16; i++) out->board[i] = board[i];
 
     probeSpawn(mgr, grid);
     if (fourOwner == FIELD_GAME_MANAGER) applyFour(FIELD_GAME_MANAGER, mgr);
