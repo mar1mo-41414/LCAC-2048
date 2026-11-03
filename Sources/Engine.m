@@ -227,6 +227,76 @@ static BOOL writeCell(void *grid, int x, int y, int32_t v) {
 }
 
 
+// --- diagnostics -----------------------------------------------------------
+// os_log hides dynamic strings ("<private>"), so names are logged as two 7-bit
+// packed numbers. Everything numeric comes through unmasked.
+static int diagLeft = 40;
+
+static void encName(const char *s, unsigned long long out[2]) {
+    out[0] = out[1] = 0;
+    for (int i = 0; s && s[i] && i < 16; i++)
+        out[i / 8] |= ((unsigned long long)(unsigned char)s[i]) << (7 * (i % 8));
+}
+
+static void dumpNames(C *c, int tag) {
+    if (!c || !class_methods || !method_name) return;
+    void *it = NULL;
+    const M *m;
+    while ((m = class_methods(c, &it))) {
+        unsigned long long e[2];
+        encName(method_name(m), e);
+        NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
+    }
+}
+
+static void logBoard(int tag, const int32_t *b) {
+    NSLog(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
+          b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+}
+
+// --- second route: write the tile, not the grid ----------------------------
+// If the game keeps its own model of the board (tiles), writing the grid is
+// erased on the next move. This writes the tile's value as well and asks it to
+// refresh its number.
+static C *tileClass;
+static const M *getTileMethod;
+static const M *tileSetNumber;
+static F *tileValue;
+
+static void findTileRoute(void) {
+    if (tileClass) return;
+    tileClass = findClass("", "Tile");
+    if (!tileClass) tileClass = findClass("Game2048", "Tile");
+    if (!tileClass) return;
+    getTileMethod = method(gridClass, "GetTile", 1);
+    if (!getTileMethod) getTileMethod = method(gridClass, "get_Tile", 1);
+    tileValue = field(tileClass, "value");
+    if (!tileValue) tileValue = field(tileClass, "Value");
+    tileSetNumber = method(tileClass, "SetNumber", 1);
+    if (!tileSetNumber) tileSetNumber = method(tileClass, "UpdateTile", 1);
+}
+
+static BOOL writeTile(void *grid, int x, int y, int32_t v) {
+    if (!getTileMethod || !tileValue || !field_set || !grid) return NO;
+    Vec2 c = {x, y};
+    void *par[] = {&c};
+    BOOL saved = failedInvocation;
+    failedInvocation = NO;
+    void *tile = call(getTileMethod, grid, par);
+    BOOL ok = NO;
+    if (tile && !failedInvocation) {
+        int32_t val = v;
+        field_set(tile, tileValue, &val);
+        if (tileSetNumber) {
+            void *np[] = {&val};
+            call(tileSetNumber, tile, np);
+        }
+        ok = !failedInvocation;
+    }
+    failedInvocation = saved;
+    return ok;
+}
+
 static BOOL containsFour(const char *s) {
     if (!s) return NO;
     for (const char *p = s; *p; p++) {
@@ -273,46 +343,17 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
     }
 }
 
-// Names only, so that a log from a device shows where the tile value is picked
-// if the field route turns out to be a dead end.
-static BOOL interestingName(const char *n) {
-    static const char *keys[] = {"spawn", "random", "addtile", "newtile", "pick"};
-    if (!n) return NO;
-    for (int k = 0; k < 5; k++) {
-        size_t len = strlen(keys[k]);
-        for (const char *p = n; *p; p++) {
-            size_t i = 0;
-            while (i < len && p[i]) {
-                char c = (p[i] >= 'A' && p[i] <= 'Z') ? (char)(p[i] - 'A' + 'a') : p[i];
-                if (c != keys[k][i]) break;
-                i++;
-            }
-            if (i == len) return YES;
-        }
-    }
-    return NO;
-}
-
 // Field names and types, for the next round of guesswork when neither route
 // works. Names may be hidden ("<private>") in release builds.
-static void dumpFieldNames(C *c, const char *label) {
-    if (!c || !class_fields || !field_name || !field_type || !type_get_name) return;
+static void dumpFieldNames(C *c, int tag) {
+    if (!c || !class_fields || !field_name) return;
     void *it = NULL;
     const F *f;
     while ((f = class_fields(c, &it))) {
-        const char *n = field_name(f);
-        const void *t = field_type(f);
-        const char *tn = t ? type_get_name(t) : NULL;
-        NSLog(@"[2048-auto] %s field: %s %s", label, n ? n : "?", tn ? tn : "?");
+        unsigned long long e[2];
+        encName(field_name(f), e);
+        NSLog(@"[2048-auto] fname %d %llx %llx", tag, e[0], e[1]);
     }
-}
-
-static void dumpMethodNames(C *c, const char *label) {
-    if (!c || !class_methods || !method_name) return;
-    void *it = NULL;
-    const M *m;
-    while ((m = class_methods(c, &it)))
-        if (interestingName(method_name(m))) NSLog(@"[2048-auto] %s method: %s", label, method_name(m));
 }
 
 static void probeSpawn(void *mgr, void *grid) {
@@ -321,8 +362,15 @@ static void probeSpawn(void *mgr, void *grid) {
     probeFields(gmClass, mgr, FIELD_GAME_MANAGER, "GameManager");
     probeFields(gridClass, grid, FIELD_GRID, "Grid");
     if (!fourOwner) {
-        dumpMethodNames(gmClass, "GameManager");
-        dumpMethodNames(gridClass, "Grid");
+        findTileRoute();
+        NSLog(@"[2048-auto] self %llx grid %llx setter %llx tile %llx getTile %llx value %llx setNum %llx",
+              (unsigned long long)(uintptr_t)&converting, (unsigned long long)(uintptr_t)grid,
+              (unsigned long long)(uintptr_t)setCellMethod, (unsigned long long)(uintptr_t)tileClass,
+              (unsigned long long)(uintptr_t)getTileMethod, (unsigned long long)(uintptr_t)tileValue,
+              (unsigned long long)(uintptr_t)tileSetNumber);
+        dumpNames(gmClass, 1);
+        dumpNames(gridClass, 2);
+        dumpNames(tileClass, 3);
         setCellMethod = findSetter();
         // Prove the setter by writing a cell's own value back before using it.
         BOOL saved = failedInvocation;
@@ -344,8 +392,8 @@ static void probeSpawn(void *mgr, void *grid) {
             NSLog(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
         } else {
             NSLog(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
-            dumpFieldNames(gmClass, "GameManager");
-            dumpFieldNames(gridClass, "Grid");
+            dumpFieldNames(gmClass, 1);
+            dumpFieldNames(gridClass, 2);
         }
     }
 }
@@ -429,9 +477,11 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             convertingStrikes = 0;
             if (twos == 1) {
                 int at = firstTwo;
-                if (writeCell(grid, at % 4, at / 4, 4))
+                if (writeCell(grid, at % 4, at / 4, 4)) {
                     board[at] = 4;
-                else {
+                    if (diagLeft > 0)
+                        NSLog(@"[2048-auto] tile write %d", (int)writeTile(grid, at % 4, at / 4, 4));
+                } else {
                     converting = 0;
                     solver_set_spawn_value(0);
                     NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
@@ -444,6 +494,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    if (diagLeft > 0) {
+        diagLeft--;
+        logBoard(1, board);
+    }
 
     probeSpawn(mgr, grid);
     if (fourOwner == FIELD_GAME_MANAGER) applyFour(FIELD_GAME_MANAGER, mgr);
@@ -457,6 +511,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
                 at = i;
             } else if (out->board[i] != expected[i])
                 added = 99;
+        if (converting && diagLeft > 0) logBoard(2, expected);
         if (added == 1 && at >= 0 && fourOwner) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
