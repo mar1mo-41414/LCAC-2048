@@ -43,13 +43,13 @@ int solver_move(const int32_t *in, int dir, int32_t *out) {
     return memcmp(in, out, 16 * sizeof(*out)) != 0;
 }
 
-// DEPTH is the normal lookahead. When the board has CROWDED_EMPTIES or fewer
-// empty cells the search goes one ply deeper: the branching factor is small
-// there and that is where the game is decided.
+// DEPTH is the shallowest lookahead. The search then deepens one ply at a
+// time, as long as NODE_BUDGET is not spent: cramped boards have a small tree,
+// so the endgame gets read further ahead without a per-move time spike.
 enum {
     DEPTH = 4,
-    DEEP_DEPTH = 5,
-    CROWDED_EMPTIES = 3,
+    MAX_DEPTH = 6,
+    NODE_BUDGET = 200000, // board nodes per move; deeper costs more time
     CACHE_BITS = 15,
     CACHE_SIZE = 1 << CACHE_BITS,
     SAMPLE_CELLS = 4,
@@ -70,7 +70,19 @@ typedef struct {
 
 typedef struct {
     Entry *cache;
+    long nodes;
 } Search;
+
+// 0 = the game may spawn 2 or 4 (90% / 10%); 2 or 4 = only that value appears.
+static int32_t spawnValue;
+
+void solver_set_spawn_value(int32_t v) {
+    spawnValue = (v == 2 || v == 4) ? v : 0;
+}
+
+int32_t solver_spawn_value(void) {
+    return spawnValue;
+}
 
 static uint64_t hashboard(const uint8_t b[16], int depth, int kind) {
     uint64_t h = 1469598103934665603ULL;
@@ -78,7 +90,7 @@ static uint64_t hashboard(const uint8_t b[16], int depth, int kind) {
         h ^= (uint64_t)b[i] + (uint64_t)(i * 37);
         h *= 1099511628211ULL;
     }
-    h ^= (unsigned)(depth * 2 + kind);
+    h ^= (unsigned)(depth * 2 + kind) ^ (unsigned)spawnValue * 8u;
     h *= 1099511628211ULL;
     return h;
 }
@@ -216,6 +228,7 @@ static double player(Search *s, const uint8_t b[16], int depth);
 
 // Chance node: sample the tiles the game may spawn, weighted 90% / 10%.
 static double chance(Search *s, uint8_t b[16], int depth) {
+    s->nodes++;
     double cached;
     if (lookup(s, b, depth, 1, &cached)) return cached;
 
@@ -232,10 +245,15 @@ static double chance(Search *s, uint8_t b[16], int depth) {
     double sum = 0;
     for (int j = 0; j < samples; j++) {
         int at = freepos[(offset + (j * n) / samples) % n];
-        b[at] = 1;
-        sum += .9 * player(s, b, depth);
-        b[at] = 2;
-        sum += .1 * player(s, b, depth);
+        if (spawnValue) {
+            b[at] = spawnValue == 4 ? 2 : 1;
+            sum += player(s, b, depth);
+        } else {
+            b[at] = 1;
+            sum += .9 * player(s, b, depth);
+            b[at] = 2;
+            sum += .1 * player(s, b, depth);
+        }
         b[at] = 0;
     }
 
@@ -246,6 +264,7 @@ static double chance(Search *s, uint8_t b[16], int depth) {
 
 // Player node: expectimax over the four legal moves.
 static double player(Search *s, const uint8_t b[16], int depth) {
+    s->nodes++;
     if (depth == 0) return evaluate(b);
 
     double cached;
@@ -267,7 +286,6 @@ static double player(Search *s, const uint8_t b[16], int depth) {
 // Returns the best direction (0..3), or -1 when no move is legal.
 int solver_best(const int32_t *in) {
     uint8_t b[16];
-    int empty = 0;
     for (int i = 0; i < 16; i++) {
         int32_t v = in[i];
         if (v < 0 || (v && (v & (v - 1)))) return -1;
@@ -278,35 +296,47 @@ int solver_best(const int32_t *in) {
         }
         if (in[i] && !r) return -1;
         b[i] = r;
-        if (!r) empty++;
     }
 
-    int depth = (empty <= CROWDED_EMPTIES) ? DEEP_DEPTH : DEPTH;
     int highest = 0;
     for (int i = 0; i < 16; i++)
         if (b[i] > highest) highest = b[i];
 
-    Search s = {calloc(CACHE_SIZE, sizeof(Entry))};
-    double best = -1e100;
+    Search s = {calloc(CACHE_SIZE, sizeof(Entry)), 0};
     int choice = -1;
+    long spent = 0;
     uint8_t next[16];
-    for (int d = 0; d < 4; d++)
-        if (move_rank(b, d, next)) {
-            double score = chance(&s, next, depth - 1);
-            // The static score cannot see that two equal tiles are worth more
-            // once joined, so a mergeable pair of 2048s could be left parked
-            // until the board jammed. Prefer the move that joins the pair.
-            if (highest >= MERGE_MAX_FROM) {
-                int after = 0;
-                for (int i = 0; i < 16; i++)
-                    if (next[i] > after) after = next[i];
-                if (after > highest) score += MERGE_MAX_BONUS;
+
+    // Deepen one ply at a time while the tree stays inside NODE_BUDGET. The
+    // node count is deterministic, so the same board always gets the same move.
+    for (int depth = DEPTH; depth <= MAX_DEPTH; depth++) {
+        double best = -1e100;
+        int move = -1;
+        long before = s.nodes;
+        for (int d = 0; d < 4; d++)
+            if (move_rank(b, d, next)) {
+                double score = chance(&s, next, depth - 1);
+                // The static score cannot see that two equal tiles are worth
+                // more once joined, so a mergeable pair of 2048s could be left
+                // parked until the board jammed. Prefer the move that joins it.
+                if (highest >= MERGE_MAX_FROM) {
+                    int after = 0;
+                    for (int i = 0; i < 16; i++)
+                        if (next[i] > after) after = next[i];
+                    if (after > highest) score += MERGE_MAX_BONUS;
+                }
+                if (score > best) {
+                    best = score;
+                    move = d;
+                }
             }
-            if (score > best) {
-                best = score;
-                choice = d;
-            }
-        }
+        if (move < 0) break;
+        choice = move;
+        spent += s.nodes - before;
+        // The next ply costs roughly five times this one; stop if it does not fit.
+        if ((NODE_BUDGET - spent) < 5 * (s.nodes - before)) break;
+    }
+
     free(s.cache);
     return choice;
 }

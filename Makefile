@@ -36,6 +36,7 @@ BUILD_DIR = build
 
 SIM_GAMES ?= 3
 SIM_MOVES ?= 5000
+SIM_SPAWN ?= 0
 
 ifeq ($(wildcard $(THEOS_COMMON)),)
 all:
@@ -53,7 +54,7 @@ test-internal: $(BUILD_DIR)/internal_test
 	./$(BUILD_DIR)/internal_test
 
 simulate: $(BUILD_DIR)/simulate
-	./$(BUILD_DIR)/simulate $(SIM_GAMES) $(SIM_MOVES)
+	./$(BUILD_DIR)/simulate $(SIM_GAMES) $(SIM_MOVES) $(SIM_SPAWN)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

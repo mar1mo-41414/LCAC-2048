@@ -28,6 +28,14 @@ static void (*field_value)(void *, F *, void *);
 static void *(*invoke)(const M *, void *, void **, void **);
 static void *(*unbox)(void *);
 static const void *(*corlib)(void);
+// Optional: only used by the experimental "spawn only 4s" probe. A missing
+// symbol must not stop the tweak, so these are loaded separately.
+static const void *(*class_fields)(C *, void **);
+static const char *(*field_name)(const F *);
+static const void *(*field_type)(const F *);
+static const char *(*type_get_name)(const void *);
+static void (*field_set)(void *, F *, void *);
+static uint32_t (*field_flags)(const F *);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
 static void *gmType;
@@ -99,6 +107,13 @@ static BOOL initEngine(void) {
     LOAD(unbox, "il2cpp_object_unbox");
     LOAD(corlib, "il2cpp_get_corlib");
 
+    *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
+    *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
+    *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
+    *(void **)(&type_get_name) = dlsym(RTLD_DEFAULT, "il2cpp_type_get_name");
+    *(void **)(&field_set) = dlsym(RTLD_DEFAULT, "il2cpp_field_set_value");
+    *(void **)(&field_flags) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_flags");
+
     if (!corlib() || !domain_get()) {
         initStatus = @"I_UNITY";
         return NO;
@@ -162,6 +177,122 @@ typedef struct {
     int32_t x, y;
 } Vec2;
 
+// --- experimental: force every new tile to be a 4 ---------------------------
+// The game keeps the odds of a 4 somewhere. If a float field of GameManager or
+// Grid looks like it (its name contains "four"), the tweak raises it to 1.0 and
+// tells the solver that only 4s appear. Every spawned tile is then checked: if a
+// 2 still shows up, the field is put back and the solver returns to 2/4.
+enum { FIELD_NONE = 0, FIELD_GAME_MANAGER = 1, FIELD_GRID = 2 };
+static F *fourField;
+static int fourOwner;
+static float fourOldValue;
+static int fourProbeDone, fourSpawns, fourReverted;
+static int32_t expected[16];
+static BOOL haveExpected;
+
+static BOOL containsFour(const char *s) {
+    if (!s) return NO;
+    for (const char *p = s; *p; p++) {
+        char c = (*p >= 'F' && *p <= 'Z') ? (char)(*p - 'A' + 'a') : *p;
+        if (c != 'f') continue;
+        char w[5] = {c, p[1], p[2], p[3], 0};
+        for (int i = 1; i < 4; i++)
+            if (w[i] >= 'F' && w[i] <= 'Z') w[i] = (char)(w[i] - 'A' + 'a');
+        if (!strcmp(w, "four")) return YES;
+    }
+    return NO;
+}
+
+static void applyFour(int owner, void *obj) {
+    if (fourOwner != owner || !fourField || !field_set) return;
+    float one = 1.0f;
+    field_set(obj, fourField, &one);
+}
+
+static void probeFields(C *c, void *obj, int owner, const char *label) {
+    if (!c || !obj || !class_fields || !field_name || !field_type || !type_get_name) return;
+    void *it = NULL;
+    const F *f;
+    while ((f = class_fields(c, &it))) {
+        const char *n = field_name(f);
+        const void *t = field_type(f);
+        const char *tn = t ? type_get_name(t) : NULL;
+        BOOL isStatic = field_flags ? (field_flags(f) & 0x10) != 0 : NO;
+        void *target = isStatic ? NULL : obj;
+        if (!tn || strcmp(tn, "System.Single")) continue;
+        float v = 0;
+        field_value(target, f, &v);
+        if (containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
+        if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
+            fourField = (F *)f;
+            fourOwner = owner;
+            fourOldValue = v;
+            if (v < 1.0f && field_set) {
+                float one = 1.0f;
+                field_set(target, f, &one);
+            }
+            NSLog(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
+        }
+    }
+}
+
+// Names only, so that a log from a device shows where the tile value is picked
+// if the field route turns out to be a dead end.
+static BOOL interestingName(const char *n) {
+    static const char *keys[] = {"spawn", "random", "addtile", "newtile", "pick"};
+    if (!n) return NO;
+    for (int k = 0; k < 5; k++) {
+        size_t len = strlen(keys[k]);
+        for (const char *p = n; *p; p++) {
+            size_t i = 0;
+            while (i < len && p[i]) {
+                char c = (p[i] >= 'A' && p[i] <= 'Z') ? (char)(p[i] - 'A' + 'a') : p[i];
+                if (c != keys[k][i]) break;
+                i++;
+            }
+            if (i == len) return YES;
+        }
+    }
+    return NO;
+}
+
+static void dumpMethodNames(C *c, const char *label) {
+    if (!c || !class_methods || !method_name) return;
+    void *it = NULL;
+    const M *m;
+    while ((m = class_methods(c, &it)))
+        if (interestingName(method_name(m))) NSLog(@"[2048-auto] %s method: %s", label, method_name(m));
+}
+
+static void probeSpawn(void *mgr, void *grid) {
+    if (fourProbeDone) return;
+    fourProbeDone = YES;
+    probeFields(gmClass, mgr, FIELD_GAME_MANAGER, "GameManager");
+    probeFields(gridClass, grid, FIELD_GRID, "Grid");
+    if (!fourOwner) {
+        dumpMethodNames(gmClass, "GameManager");
+        dumpMethodNames(gridClass, "Grid");
+    }
+    if (!fourOwner) {
+        NSLog(@"[2048-auto] no four-chance field found; spawns stay 2/4");
+        return;
+    }
+    solver_set_spawn_value(4);
+}
+
+static void revertFour(void *mgr, void *grid) {
+    if (fourReverted) return;
+    fourReverted = 1;
+    void *target = fourOwner == FIELD_GRID ? grid : mgr;
+    if (target && fourField && field_set) {
+        float old = fourOldValue;
+        field_set(target, fourField, &old);
+    }
+    fourOwner = FIELD_NONE;
+    solver_set_spawn_value(0);
+    NSLog(@"[2048-auto] a 2 spawned after forcing; reverting to 2/4");
+}
+
 // Returns status for UI; all calls occur on Unity's main thread. Unsupported modes do nothing.
 NSString *Auto2048Read(Auto2048Snapshot *out) {
     if (!out) return @"ERR";
@@ -211,6 +342,26 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
 
+    probeSpawn(mgr, grid);
+    if (fourOwner == FIELD_GAME_MANAGER) applyFour(FIELD_GAME_MANAGER, mgr);
+    if (fourOwner == FIELD_GRID) applyFour(FIELD_GRID, grid);
+    if (haveExpected) {
+        haveExpected = NO;
+        int added = 0, at = -1;
+        for (int i = 0; i < 16; i++)
+            if (expected[i] == 0 && out->board[i] != 0) {
+                added++;
+                at = i;
+            } else if (out->board[i] != expected[i])
+                added = 99;
+        if (added == 1 && at >= 0 && fourOwner) {
+            if (out->board[at] == 2)
+                revertFour(mgr, grid);
+            else if (out->board[at] == 4 && ++fourSpawns == 20)
+                NSLog(@"[2048-auto] 20 spawns, all 4s: forcing works");
+        }
+    }
+
     out->manager = (uintptr_t)mgr;
     out->game = (uintptr_t)game;
     out->grid = (uintptr_t)grid;
@@ -237,5 +388,7 @@ NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {
     Vec2 v = directions[dir];
     void *par[] = {&v};
     call(swipe, (void *)now.manager, par);
+    memcpy(expected, after, sizeof(expected));
+    haveExpected = YES;
     return failedInvocation ? @"ERR" : @"ON";
 }
