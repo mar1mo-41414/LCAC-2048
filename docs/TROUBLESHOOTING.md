@@ -70,26 +70,18 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `grid setter works; spawned 2s are turned into 4s` — フィールドは無かったので、
   出たタイルを 4 に書き換える方式で動いています。
 - `no four-chance field and no grid setter; spawns stay 2/4` — この版ではどちらの手も使えず、
-  従来通り 2 / 4 で動きます。続く `GameManager method: ...` / `Grid field: ...` の行を
-  Issue に貼ってもらえると、次の版で別の手を試せます。
-- `2s came back after rewriting; spawns stay 2/4` / `grid write failed; spawns stay 2/4` —
-  書き換えが効かなかったため、自動で 2 / 4 に戻しました (ゲームは壊れません)。
+  従来通り 2 / 4 で動きます。
+- `grid write failed; spawns stay 2/4` — 書き込みを読み直せなかったため、自動で 2 / 4 に戻しました。
+- `the game ignores rewritten cells; spawns stay 2/4` — 書き換えた盤面とゲームの手が 8 回続けて
+  食い違ったため、自動で 2 / 4 に戻しました (ゲームは壊れません)。
 - `a 2 spawned after forcing; reverting to 2/4` — 確率フィールドの推測が外れたため戻しました。
 
-### うまくいかないときの調査ログ (v3.6)
+### うまくいかないときの調査ログ (v3.7)
 
-書き換えが効いていないように見えるときに、原因を切り分けるための行を出しています。
-調査が済んだら次の版で削除します。数値はすべて伏字にならない形式で出しています
-(`<private>` で消えるのは文字列だけのため)。
-
-- `board 1: ...` — 読み取った盤面 (1 行 16 マス、左上から横に 4 つずつ)
-- `board 2: ...` — こちらが予想した 1 手後の盤面
-- `name 2 1 4b6579 ...` — クラスのメソッド名を 7bit で詰めた数値 2 つ。
-  タグは 1=GameManager / 2=Grid / 3=Tile、その次の数字は引数の個数です
-- `fname 2 ...` — フィールド名 (同じ形式)
-- `self ... grid ... setter ... tile ...` — 読み込み状態のアドレス。`self` が 2 種類出れば
-  tweak が二重に読み込まれています
-- `tile write 1` / `tile write 0` — タイル側への書き込みができたかどうか
+- `board 1: ...` — 読み取った盤面 (1 行 16 マス、左上から横に 4 つずつ)。最初の 40 回分だけ出ます
+- `board 2: ...` — こちらが予想した 1 手後の盤面。`board 1` と食い違うなら、
+  ゲームが書き換えを無視しています
+- `probe self ... grid ... setter ...` — `self` が 2 種類出れば tweak が二重に読み込まれています
 
 ### 2048 の達成画面で止まる
 
