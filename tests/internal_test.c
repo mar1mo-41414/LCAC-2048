@@ -13,5 +13,17 @@ int main(void){
  }
  int32_t in[16]={512,256,128,64,4,8,16,32,0,0,0,0,0,0,0,0},saved[16],out[16];memcpy(saved,in,sizeof(in));
  int a=solver_best(in), b=solver_best(in);assert(a==b && a>=0 && a<4 && solver_move(in,a,out));assert(!memcmp(in,saved,sizeof(in)));
+ // Regression: two equal highest tiles must be joined, not parked next to each
+ // other (実機で「2048 が隣り合っているのに合体しない」が起きた)。
+ int32_t pairs[2][16]={
+   {2048,2048,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0},
+   {2048,2048,1024,512, 256,256,64,32, 16,8,4,2, 0,0,4,0},
+ };
+ for(int t=0;t<2;t++){
+   int32_t before=pairs[t][0], d=solver_best(pairs[t]), top=0;
+   assert(d>=0 && d<4 && solver_move(pairs[t],d,out));
+   for(int i=0;i<16;i++) if(out[i]>top) top=out[i];
+   assert(top>before);
+ }
  puts("rank simulation and deterministic search tests passed (10000 boards)");
 }

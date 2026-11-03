@@ -52,7 +52,13 @@ enum {
     CROWDED_EMPTIES = 3,
     CACHE_BITS = 15,
     CACHE_SIZE = 1 << CACHE_BITS,
-    SAMPLE_CELLS = 4
+    SAMPLE_CELLS = 4,
+    // Score bonus for a move that joins two copies of the highest tile. Parking
+    // such a pair to "keep it for later" is how the board jams up. Only big
+    // tiles are forced (512 = 2^9); forcing 2s and 4s to merge early just
+    // breaks the snake order.
+    MERGE_MAX_BONUS = 1500,
+    MERGE_MAX_FROM = 9
 };
 
 typedef struct {
@@ -264,6 +270,10 @@ int solver_best(const int32_t *in) {
     }
 
     int depth = (empty <= CROWDED_EMPTIES) ? DEEP_DEPTH : DEPTH;
+    int highest = 0;
+    for (int i = 0; i < 16; i++)
+        if (b[i] > highest) highest = b[i];
+
     Search s = {calloc(CACHE_SIZE, sizeof(Entry))};
     double best = -1e100;
     int choice = -1;
@@ -271,6 +281,15 @@ int solver_best(const int32_t *in) {
     for (int d = 0; d < 4; d++)
         if (move_rank(b, d, next)) {
             double score = chance(&s, next, depth - 1);
+            // The static score cannot see that two equal tiles are worth more
+            // once joined, so a mergeable pair of 2048s could be left parked
+            // until the board jammed. Prefer the move that joins the pair.
+            if (highest >= MERGE_MAX_FROM) {
+                int after = 0;
+                for (int i = 0; i < 16; i++)
+                    if (next[i] > after) after = next[i];
+                if (after > highest) score += MERGE_MAX_BONUS;
+            }
             if (score > best) {
                 best = score;
                 choice = d;
