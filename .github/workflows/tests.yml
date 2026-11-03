@@ -32,6 +32,7 @@ jobs:
             echo "::error::$line"
           done
       - name: Check the dylib
+        id: dylib
         run: |
           dylib=$(find .theos -name 'Auto2048.dylib' -type f | head -1)
           if [ -z "$dylib" ]; then
@@ -39,6 +40,15 @@ jobs:
             exit 1
           fi
           ls -l "$dylib"
+          echo "path=$dylib" >> "$GITHUB_OUTPUT"
+      # マージ前でも実機で試せるように、ビルドした dylib を Actions の成果物に置く。
+      # リポジトリや Releases には置かない (配布はタグ -> Release のみ)。
+      - name: Upload the dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: Auto2048-dylib
+          path: ${{ steps.dylib.outputs.path }}
+          if-no-files-found: error
 
   simulate:
     name: Simulation (smoke)
