@@ -36,6 +36,7 @@ static const void *(*field_type)(const F *);
 static const char *(*type_get_name)(const void *);
 static void (*field_set)(void *, F *, void *);
 static uint32_t (*field_flags)(const F *);
+static C *(*class_element)(C *);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
 static void *gmType;
@@ -113,6 +114,7 @@ static BOOL initEngine(void) {
     *(void **)(&type_get_name) = dlsym(RTLD_DEFAULT, "il2cpp_type_get_name");
     *(void **)(&field_set) = dlsym(RTLD_DEFAULT, "il2cpp_field_set_value");
     *(void **)(&field_flags) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_flags");
+    *(void **)(&class_element) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_element_class");
 
     if (!corlib() || !domain_get()) {
         initStatus = @"I_UNITY";
@@ -168,6 +170,8 @@ static BOOL initEngine(void) {
         return NO;
     }
 
+    // Printed as literal text (not an argument) so that os_log shows it.
+    NSLog(@"[2048-auto] tweak v3.10: 2->4 rewrite (debug log off)");
     NSLog(@"[2048-auto] IL2CPP ready");
     ready = YES;
     return YES;
@@ -195,7 +199,12 @@ static BOOL haveExpected;
 // work (write, read back, compare), and switched off if 2s come back.
 static const M *setCellMethod;
 static int converting;
-static int convertingStrikes;
+static int conversionMismatch;
+// The board on screen is drawn by the view from the tile objects, so a grid
+// write alone only changes the game's logic, not the picture. If the view has
+// a no-argument redraw entry point, call it after rewriting.
+static const M *viewRefresh;
+static int refreshLogged;
 
 static const M *findSetter(void) {
     static const char *names[] = {"SetCellValue", "SetCell", "SetValue", "SetTileValue", "SetTile", "SetNumber"};
@@ -228,10 +237,16 @@ static BOOL writeCell(void *grid, int x, int y, int32_t v) {
 
 
 // --- diagnostics -----------------------------------------------------------
-// os_log hides dynamic strings ("<private>"), so names are logged as two 7-bit
-// packed numbers. Everything numeric comes through unmasked.
+// One line per read while diagLeft lasts: the board we are about to play from.
+// Numbers come through os_log unmasked (<private> only hides strings).
+// Debug output (board history, class/method dumps, probe and redraw trace) is
+// kept in the code but switched off. Set this to 1 to see it again; the twos in
+// `board 1` and the mismatch lines are the first thing to look at.
+static int diagEnabled = 0;
 static int diagLeft = 40;
 
+// Method and class names as two 7-bit packed numbers: os_log masks strings
+// ("<private>") but never numbers.
 static void encName(const char *s, unsigned long long out[2]) {
     out[0] = out[1] = 0;
     for (int i = 0; s && s[i] && i < 16; i++)
@@ -245,56 +260,29 @@ static void dumpNames(C *c, int tag) {
     while ((m = class_methods(c, &it))) {
         unsigned long long e[2];
         encName(method_name(m), e);
-        NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
+        if (diagEnabled) NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
     }
+}
+
+static BOOL containsWord(const char *n, const char *key) {
+    if (!n || !key) return NO;
+    size_t len = strlen(key);
+    for (const char *p = n; *p; p++) {
+        size_t i = 0;
+        while (i < len && p[i]) {
+            char c = (p[i] >= 'A' && p[i] <= 'Z') ? (char)(p[i] - 'A' + 'a') : p[i];
+            if (c != key[i]) break;
+            i++;
+        }
+        if (i == len) return YES;
+    }
+    return NO;
 }
 
 static void logBoard(int tag, const int32_t *b) {
+    if (!diagEnabled) return;
     NSLog(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
           b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
-}
-
-// --- second route: write the tile, not the grid ----------------------------
-// If the game keeps its own model of the board (tiles), writing the grid is
-// erased on the next move. This writes the tile's value as well and asks it to
-// refresh its number.
-static C *tileClass;
-static const M *getTileMethod;
-static const M *tileSetNumber;
-static F *tileValue;
-
-static void findTileRoute(void) {
-    if (tileClass) return;
-    tileClass = findClass("", "Tile");
-    if (!tileClass) tileClass = findClass("Game2048", "Tile");
-    if (!tileClass) return;
-    getTileMethod = method(gridClass, "GetTile", 1);
-    if (!getTileMethod) getTileMethod = method(gridClass, "get_Tile", 1);
-    tileValue = field(tileClass, "value");
-    if (!tileValue) tileValue = field(tileClass, "Value");
-    tileSetNumber = method(tileClass, "SetNumber", 1);
-    if (!tileSetNumber) tileSetNumber = method(tileClass, "UpdateTile", 1);
-}
-
-static BOOL writeTile(void *grid, int x, int y, int32_t v) {
-    if (!getTileMethod || !tileValue || !field_set || !grid) return NO;
-    Vec2 c = {x, y};
-    void *par[] = {&c};
-    BOOL saved = failedInvocation;
-    failedInvocation = NO;
-    void *tile = call(getTileMethod, grid, par);
-    BOOL ok = NO;
-    if (tile && !failedInvocation) {
-        int32_t val = v;
-        field_set(tile, tileValue, &val);
-        if (tileSetNumber) {
-            void *np[] = {&val};
-            call(tileSetNumber, tile, np);
-        }
-        ok = !failedInvocation;
-    }
-    failedInvocation = saved;
-    return ok;
 }
 
 static BOOL containsFour(const char *s) {
@@ -329,7 +317,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
         if (!tn || strcmp(tn, "System.Single")) continue;
         float v = 0;
         field_value(target, (F *)f, &v);
-        if (containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
+        if (diagEnabled && containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
         if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
             fourField = (F *)f;
             fourOwner = owner;
@@ -343,17 +331,38 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
     }
 }
 
-// Field names and types, for the next round of guesswork when neither route
-// works. Names may be hidden ("<private>") in release builds.
-static void dumpFieldNames(C *c, int tag) {
-    if (!c || !class_fields || !field_name) return;
-    void *it = NULL;
-    const F *f;
-    while ((f = class_fields(c, &it))) {
-        unsigned long long e[2];
-        encName(field_name(f), e);
-        NSLog(@"[2048-auto] fname %d %llx %llx", tag, e[0], e[1]);
+// What draws the board, and where the cells live. Logged once so the next
+// version can refresh the picture after the rewrite (the grid alone does not
+// change what is on screen).
+static void probeDraw(void *grid) {
+    BOOL debug = diagEnabled != 0;
+    if (debug) dumpNames(viewClass, 5);
+    if (debug) {
+        const M *cellsM = method(gridClass, "get_Cells", 0);
+        if (cellsM) {
+            void *cells = call(cellsM, grid, NULL);
+            if (cells && !failedInvocation) {
+                C *ac = object_class(cells);
+                C *ec = (ac && class_element) ? (C *)class_element(ac) : NULL;
+                NSLog(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
+                      (unsigned long long)(uintptr_t)ec);
+                dumpNames(ec, 4);
+            }
+        }
     }
+    static const char *keys[] = {"refresh", "redraw", "rebuild", "render", "updateboard", "updatedisplay",
+                                 "updateall", "sync"};
+    void *it = NULL;
+    const M *m;
+    while ((m = class_methods(viewClass, &it)) && !viewRefresh) {
+        if (param_count(m) != 0) continue;
+        for (int k = 0; k < 8; k++)
+            if (containsWord(method_name(m), keys[k])) {
+                viewRefresh = m;
+                break;
+            }
+    }
+    if (viewRefresh && diagEnabled) NSLog(@"[2048-auto] view redraw found");
 }
 
 static void probeSpawn(void *mgr, void *grid) {
@@ -362,16 +371,9 @@ static void probeSpawn(void *mgr, void *grid) {
     probeFields(gmClass, mgr, FIELD_GAME_MANAGER, "GameManager");
     probeFields(gridClass, grid, FIELD_GRID, "Grid");
     if (!fourOwner) {
-        findTileRoute();
-        NSLog(@"[2048-auto] self %llx grid %llx setter %llx tile %llx getTile %llx value %llx setNum %llx",
-              (unsigned long long)(uintptr_t)&converting, (unsigned long long)(uintptr_t)grid,
-              (unsigned long long)(uintptr_t)setCellMethod, (unsigned long long)(uintptr_t)tileClass,
-              (unsigned long long)(uintptr_t)getTileMethod, (unsigned long long)(uintptr_t)tileValue,
-              (unsigned long long)(uintptr_t)tileSetNumber);
-        dumpNames(gmClass, 1);
-        dumpNames(gridClass, 2);
-        dumpNames(tileClass, 3);
         setCellMethod = findSetter();
+        if (diagEnabled) NSLog(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
+              (unsigned long long)(uintptr_t)grid, (unsigned long long)(uintptr_t)setCellMethod);
         // Prove the setter by writing a cell's own value back before using it.
         BOOL saved = failedInvocation;
         failedInvocation = NO;
@@ -390,10 +392,9 @@ static void probeSpawn(void *mgr, void *grid) {
             converting = 1;
             solver_set_spawn_value(4);
             NSLog(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
+            probeDraw(grid);
         } else {
             NSLog(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
-            dumpFieldNames(gmClass, 1);
-            dumpFieldNames(gridClass, 2);
         }
     }
 }
@@ -449,8 +450,6 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     if (failedInvocation || !box || *(int32_t *)unbox(box) != 4) return @"SIZE";
 
     int32_t board[16];
-    int twos = 0;
-    int firstTwo = -1;
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
             Vec2 v = {x, y};
@@ -459,38 +458,36 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (failedInvocation || !box) return @"ERR";
             int32_t value = *(int32_t *)unbox(box);
             if (value < 0 || value == 1 || value > 536870912 || (value && (value & (value - 1)))) return @"DATA";
-            if (value == 2) {
-                twos++;
-                if (firstTwo < 0) firstTwo = x + 4 * y;
-            }
             board[x + 4 * y] = value;
         }
     }
-    // The game still spawns 2s; replace the one it just added with a 4. Only a
-    // single 2 is rewritten, because that is what one move can produce. More
-    // than that means either a board we attached to mid-game or the game
-    // putting our 4s back, so nothing is written and we watch a few moves
-    // before giving up. writeCell reads the cell back, so the board reported
-    // below is always what the grid really holds.
+    // The game keeps spawning 2s, so every 2 on the board is rewritten to a 4,
+    // including the ones that were already there when the tweak attached.
+    // writeCell reads each cell back, so the board reported below is what the
+    // grid really holds. If the game's own state stops following the rewrite
+    // (its move disagrees with our prediction over and over) the whole route is
+    // switched off further down.
     if (converting) {
-        if (twos <= 1) {
-            convertingStrikes = 0;
-            if (twos == 1) {
-                int at = firstTwo;
-                if (writeCell(grid, at % 4, at / 4, 4)) {
-                    board[at] = 4;
-                    if (diagLeft > 0)
-                        NSLog(@"[2048-auto] tile write %d", (int)writeTile(grid, at % 4, at / 4, 4));
-                } else {
-                    converting = 0;
-                    solver_set_spawn_value(0);
-                    NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
-                }
+        BOOL rewritten = NO;
+        for (int i = 0; i < 16 && converting; i++) {
+            if (board[i] != 2) continue;
+            int x = i % 4, y = i / 4;
+            if (writeCell(grid, x, y, 4)) {
+                board[i] = 4;
+                rewritten = YES;
+            } else {
+                converting = 0;
+                solver_set_spawn_value(0);
+                NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
             }
-        } else if (++convertingStrikes >= 3) {
-            converting = 0;
-            solver_set_spawn_value(0);
-            NSLog(@"[2048-auto] 2s came back after rewriting; spawns stay 2/4");
+        }
+        if (rewritten && viewRefresh) {
+            void *view = call(viewInstance, NULL, NULL);
+            if (view && !failedInvocation) call(viewRefresh, view, NULL);
+            if (!refreshLogged) {
+                refreshLogged = 1;
+                if (diagEnabled) NSLog(@"[2048-auto] view redraw called");
+            }
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
@@ -512,6 +509,18 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             } else if (out->board[i] != expected[i])
                 added = 99;
         if (converting && diagLeft > 0) logBoard(2, expected);
+        // Our prediction is based on the rewritten board. If the game keeps
+        // disagreeing with it, the rewrite is not reaching the game's own
+        // state, so stop instead of fighting it.
+        if (converting) {
+            if (added == 1)
+                conversionMismatch = 0;
+            else if (added >= 2 && ++conversionMismatch >= 8) {
+                converting = 0;
+                solver_set_spawn_value(0);
+                NSLog(@"[2048-auto] the game ignores rewritten cells; spawns stay 2/4");
+            }
+        }
         if (added == 1 && at >= 0 && fourOwner) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
