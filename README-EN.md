@@ -7,6 +7,7 @@ A tweak (dylib) that plays the regular mode of **2048** (`com.ketchapp.2048`) on
 It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is not guaranteed.**
 
 - **Automatic moves** — scores legal moves using empty cells, monotonicity, a snake pattern and more.
+  Empty cells are scored by count and by whether they are connected to other free space.
   When the two highest tiles can be joined, it always takes that move.
 - **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX`.
 - **Visible state** — the button shows `THINK` / `STALE` / `PAUSE` and so on.
@@ -21,7 +22,7 @@ It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is 
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
-| Host simulation | 9 of 16 runs reached 4096 (mean best tile 3,200) |
+| Host simulation | 8 of 16 runs reached 4096 (mean best tile 2,976) |
 
 The simulation uses very few runs and says nothing about the success rate on a device.
 Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.

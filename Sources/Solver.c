@@ -194,9 +194,21 @@ static double evaluate(const uint8_t b[16]) {
         if (sum > bestSnake) bestSnake = sum;
     }
 
+    // Space you can use: empty cells that touch another empty cell. A single
+    // isolated hole gives the board no room to shuffle, so it is worth less
+    // than an empty cell next to free space.
+    int open = 0;
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) {
+            if (b[x + 4 * y]) continue;
+            if ((x > 0 && !b[x - 1 + 4 * y]) || (x < 3 && !b[x + 1 + 4 * y]) ||
+                (y > 0 && !b[x + 4 * (y - 1)]) || (y < 3 && !b[x + 4 * (y + 1)]))
+                open++;
+        }
+
     int corner = highest && (b[0] == highest || b[3] == highest || b[12] == highest || b[15] == highest);
 
-    return empty * 260.0 + mono * 22.0 + smooth * 5.0 + merge * 18.0 + bestSnake * 1.5 +
+    return empty * 260.0 + open * 200.0 + mono * 22.0 + smooth * 5.0 + merge * 18.0 + bestSnake * 1.5 +
            (corner ? highest * 30.0 : 0.0);
 }
 
