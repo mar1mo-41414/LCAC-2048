@@ -43,7 +43,17 @@ int solver_move(const int32_t *in, int dir, int32_t *out) {
     return memcmp(in, out, 16 * sizeof(*out)) != 0;
 }
 
-enum { DEPTH = 4, CACHE_BITS = 15, CACHE_SIZE = 1 << CACHE_BITS, SAMPLE_CELLS = 4 };
+// DEPTH is the normal lookahead. When the board has CROWDED_EMPTIES or fewer
+// empty cells the search goes one ply deeper: the branching factor is small
+// there and that is where the game is decided.
+enum {
+    DEPTH = 4,
+    DEEP_DEPTH = 5,
+    CROWDED_EMPTIES = 3,
+    CACHE_BITS = 15,
+    CACHE_SIZE = 1 << CACHE_BITS,
+    SAMPLE_CELLS = 4
+};
 
 typedef struct {
     uint64_t hash;
@@ -151,7 +161,9 @@ static double evaluate(const uint8_t b[16]) {
                     if (delta > 0) asc += delta;
                     else desc -= delta;
                     smooth -= fabs((double)delta);
-                    if (delta == 0) merge++;
+                    // Weight by tile size: keeping two 1024s next to each other
+                    // matters far more than keeping two 2s.
+                    if (delta == 0) merge += v;
                 }
                 prev = v;
             }
@@ -237,6 +249,7 @@ static double player(Search *s, const uint8_t b[16], int depth) {
 // Returns the best direction (0..3), or -1 when no move is legal.
 int solver_best(const int32_t *in) {
     uint8_t b[16];
+    int empty = 0;
     for (int i = 0; i < 16; i++) {
         int32_t v = in[i];
         if (v < 0 || (v && (v & (v - 1)))) return -1;
@@ -247,15 +260,17 @@ int solver_best(const int32_t *in) {
         }
         if (in[i] && !r) return -1;
         b[i] = r;
+        if (!r) empty++;
     }
 
+    int depth = (empty <= CROWDED_EMPTIES) ? DEEP_DEPTH : DEPTH;
     Search s = {calloc(CACHE_SIZE, sizeof(Entry))};
     double best = -1e100;
     int choice = -1;
     uint8_t next[16];
     for (int d = 0; d < 4; d++)
         if (move_rank(b, d, next)) {
-            double score = chance(&s, next, DEPTH - 1);
+            double score = chance(&s, next, depth - 1);
             if (score > best) {
                 best = score;
                 choice = d;

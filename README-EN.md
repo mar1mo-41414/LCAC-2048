@@ -20,7 +20,7 @@ It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is 
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
-| Host simulation | Best tiles 2048 / 4096 / 2048 over 3 runs |
+| Host simulation | 11 of 16 runs reached 4096 (mean best tile 3,456) |
 
 The simulation uses very few runs and says nothing about the success rate on a device.
 Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.
