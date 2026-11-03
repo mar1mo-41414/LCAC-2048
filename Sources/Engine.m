@@ -221,7 +221,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
         void *target = isStatic ? NULL : obj;
         if (!tn || strcmp(tn, "System.Single")) continue;
         float v = 0;
-        field_value(target, f, &v);
+        field_value(target, (F *)f, &v);
         if (containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
         if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
             fourField = (F *)f;
@@ -229,7 +229,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
             fourOldValue = v;
             if (v < 1.0f && field_set) {
                 float one = 1.0f;
-                field_set(target, f, &one);
+                field_set(target, (F *)f, &one);
             }
             NSLog(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
         }
@@ -286,7 +286,7 @@ static void revertFour(void *mgr, void *grid) {
     void *target = fourOwner == FIELD_GRID ? grid : mgr;
     if (target && fourField && field_set) {
         float old = fourOldValue;
-        field_set(target, fourField, &old);
+        field_set(target, (F *)fourField, &old);
     }
     fourOwner = FIELD_NONE;
     solver_set_spawn_value(0);
