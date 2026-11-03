@@ -5,7 +5,10 @@
 static uint32_t state=0x952461u;
 static uint32_t rnd(void){state^=state<<13;state^=state>>17;state^=state<<5;return state;}
 int main(void){
- assert(DEPTH==4 && DEEP_DEPTH==5 && CROWDED_EMPTIES==3 && SAMPLE_CELLS==4);
+ assert(DEPTH==4 && MAX_DEPTH==6 && NODE_BUDGET==200000 && SAMPLE_CELLS==4);
+ assert(solver_spawn_value()==0);
+ solver_set_spawn_value(4); assert(solver_spawn_value()==4);
+ solver_set_spawn_value(3); assert(solver_spawn_value()==0);
  for(int t=0;t<10000;t++) {
    int32_t in[16], out[16]; uint8_t ranks[16],outRanks[16];
    for(int i=0;i<16;i++){int r=(int)(rnd()%11);r=(r<4)?0:r-3;ranks[i]=(uint8_t)r;in[i]=r?(1<<r):0;}
