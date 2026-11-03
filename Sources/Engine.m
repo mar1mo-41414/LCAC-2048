@@ -171,7 +171,7 @@ static BOOL initEngine(void) {
     }
 
     // Printed as literal text (not an argument) so that os_log shows it.
-    NSLog(@"[2048-auto] tweak v3.9: 2->4 rewrite, board log, view redraw");
+    NSLog(@"[2048-auto] tweak v3.10: 2->4 rewrite (debug log off)");
     NSLog(@"[2048-auto] IL2CPP ready");
     ready = YES;
     return YES;
@@ -239,6 +239,10 @@ static BOOL writeCell(void *grid, int x, int y, int32_t v) {
 // --- diagnostics -----------------------------------------------------------
 // One line per read while diagLeft lasts: the board we are about to play from.
 // Numbers come through os_log unmasked (<private> only hides strings).
+// Debug output (board history, class/method dumps, probe and redraw trace) is
+// kept in the code but switched off. Set this to 1 to see it again; the twos in
+// `board 1` and the mismatch lines are the first thing to look at.
+static int diagEnabled = 0;
 static int diagLeft = 40;
 
 // Method and class names as two 7-bit packed numbers: os_log masks strings
@@ -256,7 +260,7 @@ static void dumpNames(C *c, int tag) {
     while ((m = class_methods(c, &it))) {
         unsigned long long e[2];
         encName(method_name(m), e);
-        NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
+        if (diagEnabled) NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
     }
 }
 
@@ -276,6 +280,7 @@ static BOOL containsWord(const char *n, const char *key) {
 }
 
 static void logBoard(int tag, const int32_t *b) {
+    if (!diagEnabled) return;
     NSLog(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
           b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
 }
@@ -312,7 +317,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
         if (!tn || strcmp(tn, "System.Single")) continue;
         float v = 0;
         field_value(target, (F *)f, &v);
-        if (containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
+        if (diagEnabled && containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
         if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
             fourField = (F *)f;
             fourOwner = owner;
@@ -330,16 +335,19 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
 // version can refresh the picture after the rewrite (the grid alone does not
 // change what is on screen).
 static void probeDraw(void *grid) {
-    dumpNames(viewClass, 5);
-    const M *cellsM = method(gridClass, "get_Cells", 0);
-    if (cellsM) {
-        void *cells = call(cellsM, grid, NULL);
-        if (cells && !failedInvocation) {
-            C *ac = object_class(cells);
-            C *ec = (ac && class_element) ? (C *)class_element(ac) : NULL;
-            NSLog(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
-                  (unsigned long long)(uintptr_t)ec);
-            dumpNames(ec, 4);
+    BOOL debug = diagEnabled != 0;
+    if (debug) dumpNames(viewClass, 5);
+    if (debug) {
+        const M *cellsM = method(gridClass, "get_Cells", 0);
+        if (cellsM) {
+            void *cells = call(cellsM, grid, NULL);
+            if (cells && !failedInvocation) {
+                C *ac = object_class(cells);
+                C *ec = (ac && class_element) ? (C *)class_element(ac) : NULL;
+                NSLog(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
+                      (unsigned long long)(uintptr_t)ec);
+                dumpNames(ec, 4);
+            }
         }
     }
     static const char *keys[] = {"refresh", "redraw", "rebuild", "render", "updateboard", "updatedisplay",
@@ -354,7 +362,7 @@ static void probeDraw(void *grid) {
                 break;
             }
     }
-    if (viewRefresh) NSLog(@"[2048-auto] view redraw found");
+    if (viewRefresh && diagEnabled) NSLog(@"[2048-auto] view redraw found");
 }
 
 static void probeSpawn(void *mgr, void *grid) {
@@ -364,7 +372,7 @@ static void probeSpawn(void *mgr, void *grid) {
     probeFields(gridClass, grid, FIELD_GRID, "Grid");
     if (!fourOwner) {
         setCellMethod = findSetter();
-        NSLog(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
+        if (diagEnabled) NSLog(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
               (unsigned long long)(uintptr_t)grid, (unsigned long long)(uintptr_t)setCellMethod);
         // Prove the setter by writing a cell's own value back before using it.
         BOOL saved = failedInvocation;
@@ -478,7 +486,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (view && !failedInvocation) call(viewRefresh, view, NULL);
             if (!refreshLogged) {
                 refreshLogged = 1;
-                NSLog(@"[2048-auto] view redraw called");
+                if (diagEnabled) NSLog(@"[2048-auto] view redraw called");
             }
         }
     }
