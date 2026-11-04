@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.18"
-#define TWEAK_VERSION_OBJC @"v3.18"
+#define TWEAK_VERSION "v3.19"
+#define TWEAK_VERSION_OBJC @"v3.19"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -554,7 +554,7 @@ static void logFrame(const char *tag) {
 //               > ClassicRegularGameLoseScreen
 //
 // Walking the parent's children works even while they are switched off.
-static void showHudBeside(void *loseScreen) {
+static void showHudBeside(void *loseScreen, const char *loseName) {
     C *goClass = findClass("UnityEngine", "GameObject");
     C *compClass = findClass("UnityEngine", "Component");
     C *trClass = findClass("UnityEngine", "Transform");
@@ -584,7 +584,11 @@ static void showHudBeside(void *loseScreen) {
         if (!nm || failedInvocation) continue;
         char plain[64];
         managedName(nm, plain);
+        // MenuManager owns one HUD per mode. Showing both draws the score and
+        // the menu twice, so only the one that belongs to this game is used.
+        BOOL challenge = (BOOL)containsWord(loseName, "challenge");
         if (!containsWord(plain, "hud")) continue;
+        if (challenge ? !containsWord(plain, "challenge") : !containsWord(plain, "regular")) continue;
         uint8_t on = 1;
         void *p[] = {&on};
         call(setActive, go, p);
@@ -638,7 +642,7 @@ static void hideLoseScreen(BOOL verbose) {
         void *p[] = {&off};
         call(setActive, go, p);
         hidden++;
-        showHudBeside(go);
+        showHudBeside(go, plain);
     }
     if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
 }

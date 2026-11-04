@@ -15,6 +15,20 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.18 ビルド: HUD は戻ったが二重になった
+- `hud shown` が 2 回出て、スコアやメニューが重なって表示された。
+- `MenuManager` の下には HUD が 2 つあるため。
+
+  ```
+  MenuManager > ClassicRegularGameHud   (通常ゲーム用)
+              > ClassicChallengeHud     (チャレンジ用)
+              > ClassicRegularGameLoseScreen
+              > ClassicChallengeLoseScreen
+  ```
+
+- v3.19 では、閉じた LoseScreen の名前を見て**同じモードの HUD だけ**を表示に戻す
+  (`…LoseScreen` が `Challenge` を含むなら `Challenge` の HUD)。
+
 ### 実機の v3.17 ビルド: HUD はゲームが消していた
 - `lose screen hidden (0 of 69 objects)` → 1.5 秒後に `(1 of 73 objects)`。
   ゲームオーバー画面は再挑戦の 1.5 秒後に出てくるので、最初の走査ではまだ無い。
