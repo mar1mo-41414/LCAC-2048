@@ -404,6 +404,20 @@ static long long readScore(void *mgr, void *game) {
     return -1;
 }
 
+// The "play again" button in the game calls a single method. Looked up by name
+// because the app hides managed names from logs, not from the runtime.
+static const M *restartMethod;
+static int restartLooked;
+
+static const M *findRestart(void) {
+    if (restartLooked) return restartMethod;
+    restartLooked = 1;
+    static const char *names[] = {"RestartCurrentGame", "RestartGame", "Restart", "PlayAgain", "NewGame"};
+    for (int i = 0; i < 5 && !restartMethod; i++) restartMethod = method(gmClass, names[i], 0);
+    if (diagEnabled) NSLog(@"[2048-auto] restart method %llx", (unsigned long long)(uintptr_t)restartMethod);
+    return restartMethod;
+}
+
 static void saveGameOver(const int32_t *b, long long score) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     if ([paths count] == 0) return;
@@ -667,6 +681,33 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     out->game = (uintptr_t)game;
     out->grid = (uintptr_t)grid;
     return @"OK";
+}
+
+BOOL Auto2048GameOver(void) { return gameOverLogged ? YES : NO; }
+
+// Starts a new game after a dead end. Returns "ON" when the game was asked to
+// restart, "NO" when there was nothing to do. The caller re-reads the board on
+// the next tick, so a restart that silently fails simply comes back as another
+// game over and is retried.
+NSString *Auto2048Restart(void) {
+    if (!initEngine()) return initStatus;
+    if (!gameOverLogged) return @"NO";
+    failedInvocation = NO;
+    void *args[] = {gmType};
+    void *mgr = call(findObj, NULL, args);
+    if (failedInvocation || !mgr) return @"NO";
+    const M *m = findRestart();
+    if (!m) {
+        NSLog(@"[2048-auto] restart method not found");
+        return @"NO";
+    }
+    call(m, mgr, NULL);
+    if (failedInvocation) return @"NO";
+    // The next game over is a different game, so allow it to be written out.
+    gameOverLogged = 0;
+    haveExpected = NO;
+    NSLog(@"[2048-auto] restart: new game");
+    return @"ON";
 }
 
 NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {

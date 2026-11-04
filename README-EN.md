@@ -59,6 +59,16 @@ The game and its IPA are not included.
   search result was discarded. All three are normal.
 - The 2048 achievement screen shows `PAUSE`. If AUTO remains ON, pressing Continue resumes auto-play.
 
+### RETRY button
+
+| Action | Effect |
+| --- | --- |
+| Tap | ON / OFF (OFF on launch) |
+
+- While ON, every game over presses "play again" for you, and this repeats until you turn it off.
+- Turning it ON also turns AUTO on (a game over can only happen while auto-play is running).
+- Each game is written to the game-over log, so a retry session leaves one block per game.
+
 ### Game-over log
 
 When the game is over, the final board is appended to `Documents/LCAC-2048_over.log`
