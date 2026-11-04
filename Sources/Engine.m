@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.13"
-#define TWEAK_VERSION_OBJC @"v3.13"
+#define TWEAK_VERSION "v3.14"
+#define TWEAK_VERSION_OBJC @"v3.14"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -504,10 +504,113 @@ static int restartPending;
 // off while a game is running, so it has to be switched off again after the
 // model has been restarted for the player.
 static int overlayHidesLeft;
+static C *objClassRef;
+
+// Object.FindObjectsOfType(Type): every object of a class that is in the scene.
+static void *findAllOf(C *k) {
+    if (!k || !objClassRef || !class_type || !type_object) return NULL;
+    const M *findAll = NULL;
+    void *it = NULL;
+    const M *candidate;
+    while ((candidate = class_methods(objClassRef, &it))) {
+        const char *n = method_name(candidate);
+        if (!n || strcmp(n, "FindObjectsOfType") || param_count(candidate) != 1 || method_generic(candidate))
+            continue;
+        findAll = candidate;
+        break;
+    }
+    if (!findAll) return NULL;
+    void *typeObj = type_object(class_type(k));
+    if (!typeObj) return NULL;
+    void *par[] = {typeObj};
+    void *arr = call(findAll, NULL, par);
+    return failedInvocation ? NULL : arr;
+}
+
+// Whether the game loop is running at all. A frozen counter means the screen is
+// not being redrawn, so hiding an object would look like it did nothing.
+static void logFrame(const char *tag) {
+    C *t = findClass("UnityEngine", "Time");
+    const M *fc = t ? method(t, "get_frameCount", 0) : NULL;
+    if (!fc) return;
+    void *box = call(fc, NULL, NULL);
+    if (failedInvocation || !box) return;
+    NSLog(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
+}
+
+// One canvas = one screen. Walking the transform tree shows the parts of that
+// screen, including the ones that are switched off.
+static void dumpTree(void *tr, int depth, int *budget) {
+    if (!tr || depth > 4 || *budget <= 0) return;
+    C *trClass = findClass("UnityEngine", "Transform");
+    C *compClass = findClass("UnityEngine", "Component");
+    C *objClass = findClass("UnityEngine", "Object");
+    C *goClass = findClass("UnityEngine", "GameObject");
+    if (!trClass || !compClass || !objClass || !goClass) return;
+    const M *getChildCount = method(trClass, "get_childCount", 0);
+    const M *getChild = method(trClass, "GetChild", 1);
+    const M *getGameObject = method(compClass, "get_gameObject", 0);
+    const M *nameOf = method(objClass, "get_name", 0);
+    const M *getActive = method(goClass, "get_activeSelf", 0);
+    if (!getChildCount || !getChild || !getGameObject || !nameOf) return;
+    void *box = call(getChildCount, tr, NULL);
+    if (failedInvocation || !box) return;
+    int n = *(int32_t *)unbox(box);
+    for (int i = 0; i < n && *budget > 0; i++) {
+        int32_t idx = i;
+        void *par[] = {&idx};
+        void *child = call(getChild, tr, par);
+        if (failedInvocation || !child) continue;
+        void *go = call(getGameObject, child, NULL);
+        void *nm = go ? call(nameOf, go, NULL) : NULL;
+        if (!nm || failedInvocation) continue;
+        unsigned long long c[3] = {0, 0, 0};
+        encManagedName(nm, c);
+        int active = 1;
+        if (getActive) {
+            void *ab = call(getActive, go, NULL);
+            if (!failedInvocation && ab) active = *(uint8_t *)unbox(ab);
+        }
+        NSLog(@"[2048-auto] tree %d %d %llx %llx %llx", depth, active, c[0], c[1], c[2]);
+        (*budget)--;
+        dumpTree(child, depth + 1, budget);
+    }
+}
+
+static void dumpCanvases(void) {
+    C *canvasClass = findClass("UnityEngine", "Canvas");
+    C *compClass = findClass("UnityEngine", "Component");
+    C *objClass = findClass("UnityEngine", "Object");
+    C *trClass = findClass("UnityEngine", "Transform");
+    if (!canvasClass || !compClass || !objClass || !trClass) return;
+    const M *getTransform = method(compClass, "get_transform", 0);
+    const M *getGameObject = method(compClass, "get_gameObject", 0);
+    const M *nameOf = method(objClass, "get_name", 0);
+    void *arr = findAllOf(canvasClass);
+    if (!arr) {
+        NSLog(@"[2048-auto] no canvases");
+        return;
+    }
+    int total = managedCount(arr);
+    NSLog(@"[2048-auto] canvases: %d", total);
+    for (int i = 0; i < total && i < 8; i++) {
+        void *canvas = managedItem(arr, i);
+        if (!canvas) continue;
+        void *go = getGameObject ? call(getGameObject, canvas, NULL) : NULL;
+        void *nm = go ? call(nameOf, go, NULL) : NULL;
+        unsigned long long c[3] = {0, 0, 0};
+        if (nm && !failedInvocation) encManagedName(nm, c);
+        NSLog(@"[2048-auto] canvas %d %llx %llx %llx", i, c[0], c[1], c[2]);
+        void *tr = getTransform ? call(getTransform, canvas, NULL) : NULL;
+        int budget = 40;
+        if (tr) dumpTree(tr, 1, &budget);
+    }
+}
+
 
 static void hideGameOverOverlay(BOOL verbose) {
     C *goClass = findClass("UnityEngine", "GameObject");
-    C *objClass = findClass("UnityEngine", "Object");
+    C *objClass = objClassRef = findClass("UnityEngine", "Object");
     C *compClass = findClass("UnityEngine", "Component");
     C *trClass = findClass("UnityEngine", "Transform");
     if (!goClass || !objClass || !compClass || !trClass) return;
@@ -567,6 +670,10 @@ static void hideGameOverOverlay(BOOL verbose) {
         hidden++;
     }
     NSLog(@"[2048-auto] overlay hidden (%d of %d objects)", hidden, total);
+    if (verbose) {
+        logFrame("after hide");
+        dumpCanvases();
+    }
 }
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
@@ -860,6 +967,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     if (overlayHidesLeft > 0) {
         overlayHidesLeft--;
         hideGameOverOverlay(NO);
+        logFrame("sweep");
     }
     if (restartPending) {
         restartPending = 0;
