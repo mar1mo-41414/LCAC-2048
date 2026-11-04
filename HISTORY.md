@@ -15,6 +15,15 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.8 ビルド: 盤面は戻るがゲームオーバー画面が消えない
+- `restart candidate` の記録から、効いたのは `RestartCurrentGameMode` (戻り値 `System.Void`) と判明。
+  呼ぶと盤面は 2 タイルの新しいゲームに戻る (`restart took effect: 2 tiles`)。
+- ただし画面は「ゲームオーバー！」のパネルのまま。**盤面 (モデル) と画面は別**で、
+  この処理はモデルしか作り直さない。
+- v3.9 では画面側 (`GridViewManager`) の部品を列挙し、それらしいパネルを
+  `Hide` / `Close` / `SetActive(false)` で閉じにいく。閉じたかどうかは
+  `panel deactivated` / `object deactivated` で分かる。
+
 ### 実機の v3.7 ビルドのログ: 再開の処理は呼べたがゲームは始まらない
 - `restart entry` で `RestartCurrentGa…` を掴めていたが、ゲームオーバー画面のままだった。
 - 名前は 16 文字までしか出せず末尾が不明なので、記録を 24 文字に増やし、

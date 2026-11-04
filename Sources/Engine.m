@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.8"
-#define TWEAK_VERSION_OBJC @"v3.8"
+#define TWEAK_VERSION "v3.9"
+#define TWEAK_VERSION_OBJC @"v3.9"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -45,6 +45,10 @@ static C *(*class_element)(C *);
 static C *(*class_parent)(C *);
 static const char *(*class_name)(C *);
 static const void *(*method_ret)(const M *);
+static void *(*class_fields)(C *, void **);
+static uint16_t *(*string_chars)(void *);
+static const char *(*field_name)(const void *);
+static const void *(*field_type)(const void *);
 static const void *(*method_param)(const M *, uint32_t);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
@@ -118,6 +122,7 @@ static BOOL initEngine(void) {
     LOAD(corlib, "il2cpp_get_corlib");
 
     *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
+    *(void **)(&string_chars) = dlsym(RTLD_DEFAULT, "il2cpp_string_chars");
     *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
     *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
     *(void **)(&type_get_name) = dlsym(RTLD_DEFAULT, "il2cpp_type_get_name");
@@ -127,6 +132,9 @@ static BOOL initEngine(void) {
     *(void **)(&class_parent) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_parent");
     *(void **)(&class_name) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_name");
     *(void **)(&method_ret) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_return_type");
+    *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
+    *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
+    *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
     *(void **)(&method_param) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_param");
 
     if (!corlib() || !domain_get()) {
@@ -265,6 +273,28 @@ static void encName3(const char *s, unsigned long long out[3]) {
     out[0] = out[1] = out[2] = 0;
     for (int i = 0; s && s[i] && i < 24; i++)
         out[i / 8] |= ((unsigned long long)(unsigned char)s[i]) << (7 * (i % 8));
+}
+
+// A managed string (UTF-16) packed the same way; used for GameObject names.
+// Unity object names are ASCII, so the low 7 bits are enough.
+static void encManagedName(void *str, unsigned long long out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    if (!str || !string_chars) return;
+    const uint16_t *ch = string_chars(str);
+    if (!ch) return;
+    for (int i = 0; i < 24 && ch[i]; i++)
+        out[i / 8] |= ((unsigned long long)(ch[i] & 0x7f)) << (7 * (i % 8));
+}
+
+// Plain ASCII copy of a managed string (keywords only; names are ASCII).
+static void managedName(void *str, char out[25]) {
+    out[0] = 0;
+    if (!str || !string_chars) return;
+    const uint16_t *ch = string_chars(str);
+    if (!ch) return;
+    int i = 0;
+    for (; i < 24 && ch[i]; i++) out[i] = (char)(ch[i] & 0x7f);
+    out[i] = 0;
 }
 
 static void encName(const char *s, unsigned long long out[2]) {
@@ -429,6 +459,90 @@ static int restartLooked;
 // Set when a restart was asked for; the next readable board reports whether it
 // actually took effect.
 static int restartPending;
+
+// The game over panel is a UI object, not part of the model. Restarting the
+// model therefore leaves the panel on screen, and the model can only be moved
+// by the tweak while the player sees a frozen board. Find the panel on the view
+// manager and try to close it.
+static void probePanels(void) {
+    if (!class_fields || !field_name || !field_type || !type_get_name || !field_value) return;
+    C *goClass = findClass("UnityEngine", "GameObject");
+    const M *nameOf = method(goClass, "get_name", 0);
+    const M *setActive = method(goClass, "SetActive", 1);
+    const M *getComponentObject = method(findClass("UnityEngine", "Component"), "get_gameObject", 0);
+    void *view = call(viewInstance, NULL, NULL);
+    if (!view || failedInvocation) return;
+    void *it = NULL;
+    const void *f;
+    int shown = 0;
+    while ((f = class_fields(viewClass, &it)) && shown < 40) {
+        const char *fn = field_name(f);
+        const void *ft = field_type(f);
+        const char *tn = ft ? type_get_name(ft) : NULL;
+        if (!fn) continue;
+        unsigned long long a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
+        encName3(fn, a);
+        encName3(tn, b);
+        NSLog(@"[2048-auto] field %llx %llx %llx / %llx %llx %llx", a[0], a[1], a[2], b[0], b[1], b[2]);
+        shown++;
+        if (!tn) continue;
+        if (!containsWord(tn, "over") && !containsWord(tn, "panel") && !containsWord(tn, "popup") &&
+            !containsWord(tn, "dialog"))
+            continue;
+        void *val = NULL;
+        field_value(view, f, &val);
+        if (val && tn && containsWord(tn, "GameObject") && nameOf) {
+            // The field is a plain GameObject: its name says what it is.
+            void *nm = call(nameOf, val, NULL);
+            unsigned long long c[3] = {0, 0, 0};
+            char plain[25] = {0};
+            if (!failedInvocation && nm) {
+                encManagedName(nm, c);
+                managedName(nm, plain);
+                NSLog(@"[2048-auto] object %llx %llx %llx", c[0], c[1], c[2]);
+            }
+            if (setActive && (containsWord(plain, "over") || containsWord(plain, "popup") ||
+                              containsWord(plain, "dialog") || containsWord(plain, "panel"))) {
+                uint8_t off = 0;
+                void *par[] = {&off};
+                call(setActive, val, par);
+                NSLog(@"[2048-auto] object deactivated");
+            }
+            continue;
+        }
+        if (!val) {
+            NSLog(@"[2048-auto] panel field is empty");
+            continue;
+        }
+        C *k = object_class(val);
+        void *mit = NULL;
+        const M *m;
+        int done = 0;
+        while ((m = class_methods(k, &mit))) {
+            const char *mn = method_name(m);
+            if (!mn || param_count(m) != 0) continue;
+            if (!containsWord(mn, "hide") && !containsWord(mn, "close") && !containsWord(mn, "dismiss")) continue;
+            unsigned long long c[3] = {0, 0, 0};
+            encName3(mn, c);
+            NSLog(@"[2048-auto] panel hide %llx %llx %llx", c[0], c[1], c[2]);
+            call(m, val, NULL);
+            done = 1;
+            break;
+        }
+        if (!done && getComponentObject && setActive) {
+            // No hide/close method: switch the panel's GameObject off instead.
+            void *go = call(getComponentObject, val, NULL);
+            if (go && !failedInvocation) {
+                uint8_t off = 0;
+                void *par[] = {&off};
+                call(setActive, go, par);
+                NSLog(@"[2048-auto] panel deactivated");
+            }
+        } else if (!done) {
+            NSLog(@"[2048-auto] panel hide method not found");
+        }
+    }
+}
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
 // IEnumerator, and nothing happens until it is handed to StartCoroutine.
@@ -723,6 +837,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         for (int i = 0; i < 16; i++)
             if (board[i]) tiles++;
         NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        probePanels();
     }
     noteGameOver(board, mgr, game);
     if (diagLeft > 0) {
