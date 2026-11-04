@@ -5,6 +5,11 @@
 #include <stdint.h>
 #include <string.h>
 
+// Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
+// format string (not passed as an argument) so that os_log does not mask it.
+#define TWEAK_VERSION "v3.6"
+#define TWEAK_VERSION_OBJC @"v3.6"
+
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
 typedef void C;
@@ -171,7 +176,7 @@ static BOOL initEngine(void) {
     }
 
     // Printed as literal text (not an argument) so that os_log shows it.
-    NSLog(@"[2048-auto] tweak v3.10: 2->4 rewrite (debug log off)");
+    NSLog(@"[2048-auto] tweak " TWEAK_VERSION ": 2->4 rewrite, game over log");
     NSLog(@"[2048-auto] IL2CPP ready");
     ready = YES;
     return YES;
@@ -331,6 +336,129 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
     }
 }
 
+// --- game over: keep the final board ---------------------------------------
+// The app has no log of its own, so the last board is appended to
+// Documents/LCAC-2048_over.log when no move is left. One block per game; the
+// flag resets as soon as the board can move again (new game or undo).
+static int gameOverLogged;
+static const M *scoreGetter;
+static F *scoreField;
+static int scoreOnGame;
+
+// Same test the solver uses to decide whether a move exists, so there is only
+// one implementation of the rules.
+static BOOL anyMovePossible(const int32_t *b) {
+    int32_t after[16];
+    for (int d = 0; d < 4; d++)
+        if (solver_move(b, d, after)) return YES;
+    return NO;
+}
+
+// The score lives somewhere on GameManager or on the running game object. Both
+// are probed once; if neither has it the log shows -1 instead of failing.
+static void findScore(void *game) {
+    if (scoreGetter || scoreField) return;
+    static const char *getters[] = {"get_Score", "GetScore", "get_TotalScore", "get_ScoreValue"};
+    static const char *fields[] = {"_score", "score", "Score", "_totalScore", "totalScore"};
+    C *classes[2];
+    classes[0] = gmClass;
+    classes[1] = game ? object_class(game) : NULL;
+    for (int c = 0; c < 2 && !scoreGetter && !scoreField; c++) {
+        C *k = classes[c];
+        if (!k) continue;
+        for (int i = 0; i < 4 && !scoreGetter; i++) {
+            const M *m = method(k, getters[i], 0);
+            if (m) {
+                scoreGetter = m;
+                scoreOnGame = c;
+            }
+        }
+        for (int i = 0; i < 5 && !scoreField; i++) scoreField = field(k, fields[i]);
+        if (!scoreGetter) {
+            void *it = NULL;
+            const M *m;
+            while ((m = class_methods(k, &it))) {
+                const char *n = method_name(m);
+                if (!n || param_count(m) != 0) continue;
+                if (!containsWord(n, "score") || containsWord(n, "high")) continue;
+                scoreGetter = m;
+                scoreOnGame = c;
+                break;
+            }
+        }
+    }
+}
+
+static long long readScore(void *mgr, void *game) {
+    findScore(game);
+    void *target = scoreOnGame ? game : mgr;
+    if (scoreGetter && target) {
+        void *box = call(scoreGetter, target, NULL);
+        if (!failedInvocation && box) return *(int32_t *)unbox(box);
+    }
+    if (scoreField && field_value && target) {
+        int32_t v = 0;
+        field_value(target, scoreField, &v);
+        if (!failedInvocation) return v;
+    }
+    return -1;
+}
+
+static void saveGameOver(const int32_t *b, long long score) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if ([paths count] == 0) return;
+    NSString *path = [[paths objectAtIndex:0] stringByAppendingPathComponent:@"LCAC-2048_over.log"];
+
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss Z"];
+    NSString *when = [formatter stringFromDate:[NSDate date]];
+
+    NSMutableString *text = [NSMutableString string];
+    [text appendFormat:@"%@ %@ score=%lld\n", when, TWEAK_VERSION_OBJC, score];
+    for (int y = 0; y < 4; y++)
+        [text appendFormat:@"%6d %6d %6d %6d\n", b[4 * y], b[4 * y + 1], b[4 * y + 2], b[4 * y + 3]];
+    [text appendString:@"\n"];
+
+    NSFileManager *files = [NSFileManager defaultManager];
+    if (![files fileExistsAtPath:path]) [files createFileAtPath:path contents:nil attributes:nil];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (!handle) return;
+    [handle seekToEndOfFile];
+    [handle writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+    [handle closeFile];
+}
+
+// Called from the normal read path with a board that was just parsed.
+static void noteGameOver(const int32_t *board, void *mgr, void *game) {
+    if (anyMovePossible(board)) {
+        gameOverLogged = 0;
+        return;
+    }
+    if (gameOverLogged) return;
+    gameOverLogged = 1;
+    saveGameOver(board, readScore(mgr, game));
+    NSLog(@"[2048-auto] game over: board saved");
+}
+
+// Called when the game has already stopped taking input: the board is still
+// readable there, and that is where the final position usually shows up.
+static void checkGameOverQuietly(void *mgr, void *game) {
+    if (gameOverLogged || !getGrid || !getCell) return;
+    void *grid = call(getGrid, game, NULL);
+    if (failedInvocation || !grid) return;
+    int32_t b[16];
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            Vec2 v = {x, y};
+            void *par[] = {&v};
+            void *box = call(getCell, grid, par);
+            if (failedInvocation || !box) return;
+            b[x + 4 * y] = *(int32_t *)unbox(box);
+        }
+    }
+    noteGameOver(b, mgr, game);
+}
+
 // What draws the board, and where the cells live. Logged once so the next
 // version can refresh the picture after the rewrite (the grid alone does not
 // change what is on screen).
@@ -428,7 +556,12 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     if (!game || object_class(game) != regularClass) return @"MODE";
 
     void *box = call(active, game, NULL);
-    if (failedInvocation || !box || !*(uint8_t *)unbox(box)) return @"PAUSE";
+    if (failedInvocation || !box || !*(uint8_t *)unbox(box)) {
+        // The game stops taking input once it is over, and that is exactly when
+        // the last board has to be written out.
+        checkGameOverQuietly(mgr, game);
+        return @"PAUSE";
+    }
 
     void *grid = call(getGrid, game, NULL);
     if (failedInvocation) return @"G_EXC";
@@ -491,6 +624,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    noteGameOver(board, mgr, game);
     if (diagLeft > 0) {
         diagLeft--;
         logBoard(1, board);
