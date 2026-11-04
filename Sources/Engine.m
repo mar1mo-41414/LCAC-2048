@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.7"
-#define TWEAK_VERSION_OBJC @"v3.7"
+#define TWEAK_VERSION "v3.8"
+#define TWEAK_VERSION_OBJC @"v3.8"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -42,6 +42,10 @@ static const char *(*type_get_name)(const void *);
 static void (*field_set)(void *, F *, void *);
 static uint32_t (*field_flags)(const F *);
 static C *(*class_element)(C *);
+static C *(*class_parent)(C *);
+static const char *(*class_name)(C *);
+static const void *(*method_ret)(const M *);
+static const void *(*method_param)(const M *, uint32_t);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
 static void *gmType;
@@ -120,6 +124,10 @@ static BOOL initEngine(void) {
     *(void **)(&field_set) = dlsym(RTLD_DEFAULT, "il2cpp_field_set_value");
     *(void **)(&field_flags) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_flags");
     *(void **)(&class_element) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_element_class");
+    *(void **)(&class_parent) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_parent");
+    *(void **)(&class_name) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_name");
+    *(void **)(&method_ret) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_return_type");
+    *(void **)(&method_param) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_param");
 
     if (!corlib() || !domain_get()) {
         initStatus = @"I_UNITY";
@@ -251,6 +259,14 @@ static int diagLeft = 40;
 
 // Method and class names as two 7-bit packed numbers: os_log masks strings
 // ("<private>") but never numbers.
+// Same idea as encName, but keeps 24 characters. Used when a name has to be
+// identified exactly (the restart entry point is longer than 16 characters).
+static void encName3(const char *s, unsigned long long out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    for (int i = 0; s && s[i] && i < 24; i++)
+        out[i / 8] |= ((unsigned long long)(unsigned char)s[i]) << (7 * (i % 8));
+}
+
 static void encName(const char *s, unsigned long long out[2]) {
     out[0] = out[1] = 0;
     for (int i = 0; s && s[i] && i < 16; i++)
@@ -405,21 +421,56 @@ static long long readScore(void *mgr, void *game) {
 
 // The "play again" button in the game calls a single method. Looked up by name
 // because the app hides managed names from logs, not from the runtime.
-static const M *restartMethod;
+static const M *restartList[8];
+static int restartListOnGame[8];
+static int restartCount;
+static int restartIndex;
 static int restartLooked;
-static int restartOnGame;
+// Set when a restart was asked for; the next readable board reports whether it
+// actually took effect.
+static int restartPending;
+
+// A "play again" handler is quite often a coroutine: invoking it only builds an
+// IEnumerator, and nothing happens until it is handed to StartCoroutine.
+static const M *startCoroutine;
+static int startCoroutineLooked;
+
+static const M *findStartCoroutine(void) {
+    if (startCoroutineLooked) return startCoroutine;
+    startCoroutineLooked = 1;
+    C *k = gmClass;
+    for (int depth = 0; k && method_param && class_parent && class_name && depth < 12; depth++) {
+        const char *n = class_name(k);
+        if (n && !strcmp(n, "MonoBehaviour")) {
+            void *it = NULL;
+            const M *m;
+            while ((m = class_methods(k, &it))) {
+                const char *mn = method_name(m);
+                if (!mn || strcmp(mn, "StartCoroutine") || param_count(m) != 1) continue;
+                const void *pt = method_param(m, 0);
+                const char *tn = pt ? type_get_name(pt) : NULL;
+                if (tn && strstr(tn, "IEnumerator")) {
+                    startCoroutine = m;
+                    break;
+                }
+            }
+        }
+        k = class_parent(k);
+    }
+    return startCoroutine;
+}
 
 // The exact name is not known: the app hides method names from logs, and the
 // truncated dump only shows the first 16 characters. Match by keyword instead,
 // preferring methods that take no arguments.
-static const M *findRestart(void *game) {
-    if (restartLooked) return restartMethod;
+static void findRestart(void *game) {
+    if (restartLooked) return;
     restartLooked = 1;
     static const char *keys[] = {"restart", "playagain", "newgame", "newround", "startover"};
     C *classes[2];
     classes[0] = gmClass;
     classes[1] = game ? object_class(game) : NULL;
-    for (int c = 0; c < 2 && !restartMethod; c++) {
+    for (int c = 0; c < 2 && restartCount < 8; c++) {
         C *k = classes[c];
         if (!k) continue;
         void *it = NULL;
@@ -429,18 +480,21 @@ static const M *findRestart(void *game) {
             if (!n || param_count(m) != 0) continue;
             for (int i = 0; i < 5; i++) {
                 if (!containsWord(n, keys[i])) continue;
-                restartMethod = m;
-                restartOnGame = c;
-                // Encoded so the name survives os_log; useful when it fails.
-                unsigned long long e[2];
-                encName(n, e);
-                NSLog(@"[2048-auto] restart entry %llx %llx", e[0], e[1]);
+                unsigned long long e[3], r[3] = {0, 0, 0};
+                encName3(n, e);
+                const void *rt = method_ret ? method_ret(m) : NULL;
+                if (rt && type_get_name) encName3(type_get_name(rt), r);
+                NSLog(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
+                      e[0], e[1], e[2], r[0], r[1], r[2]);
+                if (restartCount < 8) {
+                    restartList[restartCount] = m;
+                    restartListOnGame[restartCount] = c;
+                    restartCount++;
+                }
                 break;
             }
-            if (restartMethod) break;
         }
     }
-    return restartMethod;
 }
 
 static void saveGameOver(const int32_t *b, long long score) {
@@ -663,6 +717,13 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    if (restartPending) {
+        restartPending = 0;
+        int tiles = 0;
+        for (int i = 0; i < 16; i++)
+            if (board[i]) tiles++;
+        NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+    }
     noteGameOver(board, mgr, game);
     if (diagLeft > 0) {
         diagLeft--;
@@ -716,17 +777,36 @@ NSString *Auto2048Restart(void) {
     void *game = NULL;
     field_value(mgr, currentField, &game);
     if (failedInvocation) return @"NO";
-    const M *m = findRestart(game);
-    if (!m) {
+    findRestart(game);
+    if (!restartCount) {
         NSLog(@"[2048-auto] restart method not found");
         return @"NO";
     }
-    call(m, restartOnGame ? game : mgr, NULL);
+    int slot = restartIndex++ % restartCount;
+    const M *m = restartList[slot];
+    if (!m) return @"NO";
+    void *ret = call(m, restartListOnGame[slot] ? game : mgr, NULL);
     if (failedInvocation) return @"NO";
+    // A coroutine has to be started; invoking it alone does nothing.
+    if (ret && method_ret && type_get_name) {
+        const void *rt = method_ret(m);
+        const char *tn = rt ? type_get_name(rt) : NULL;
+        if (tn && strstr(tn, "IEnumerator")) {
+            const M *sc = findStartCoroutine();
+            if (sc) {
+                void *par[] = {ret};
+                call(sc, mgr, par);
+                NSLog(@"[2048-auto] restart: coroutine started");
+            } else {
+                NSLog(@"[2048-auto] restart: coroutine not startable");
+            }
+        }
+    }
+    restartPending = 1;
     // The next game over is a different game, so allow it to be written out.
     gameOverLogged = 0;
     haveExpected = NO;
-    NSLog(@"[2048-auto] restart: new game");
+    NSLog(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
     return @"ON";
 }
 
