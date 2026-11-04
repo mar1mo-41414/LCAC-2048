@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.19"
-#define TWEAK_VERSION_OBJC @"v3.19"
+#define TWEAK_VERSION "v3.19-1"
+#define TWEAK_VERSION_OBJC @"v3.19-1"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -490,10 +490,16 @@ static const M *restartList[8];
 static int restartListOnGame[8];
 static int restartCount;
 static int restartIndex;
+// The candidate that actually started a new game. Once known it is used for
+// every later game over: trying the others again only breaks the next restart.
+static int restartGood = -1;
+static int restartSlot;
 static int restartLooked;
 // Set when a restart was asked for; the next readable board reports whether it
 // actually took effect.
 static int restartPending;
+// Consecutive reads that came back as PAUSE.
+static int pauseStreak;
 
 // The game over screen is not part of the model, so restarting the model leaves
 // it on screen. The scene tree says which object it is:
@@ -870,6 +876,13 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         // The game stops taking input once it is over, and that is exactly when
         // the last board has to be written out.
         checkGameOverQuietly(mgr, game);
+        // Still inactive a few seconds later while the board is not dead: the
+        // game is stuck rather than finished. Ask for the restart path.
+        if (!gameOverLogged && ++pauseStreak >= 12) {
+            pauseStreak = 0;
+            gameOverLogged = 1;
+            NSLog(@"[2048-auto] game stuck; asking for a restart");
+        }
         return @"PAUSE";
     }
 
@@ -933,6 +946,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             }
         }
     }
+    pauseStreak = 0;
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
     // The game may put the panel back a frame later, so sweep a couple of times.
     if (overlayHidesLeft > 0) {
@@ -946,6 +960,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         for (int i = 0; i < 16; i++)
             if (board[i]) tiles++;
         NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        if (restartGood < 0) {
+            restartGood = restartSlot;
+            NSLog(@"[2048-auto] restart entry %d kept", restartGood + 1);
+        }
         void *view = call(viewInstance, NULL, NULL);
         if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
         hideLoseScreen(YES);
@@ -1013,7 +1031,8 @@ NSString *Auto2048Restart(void) {
         NSLog(@"[2048-auto] restart method not found");
         return @"NO";
     }
-    int slot = restartIndex++ % restartCount;
+    int slot = restartGood >= 0 ? restartGood : (restartIndex++ % restartCount);
+    restartSlot = slot;
     const M *m = restartList[slot];
     if (!m) return @"NO";
     void *ret = call(m, restartListOnGame[slot] ? game : mgr, NULL);
