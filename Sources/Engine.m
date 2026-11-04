@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.6"
-#define TWEAK_VERSION_OBJC @"v3.6"
+#define TWEAK_VERSION "v3.7"
+#define TWEAK_VERSION_OBJC @"v3.7"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -204,7 +204,6 @@ static BOOL haveExpected;
 // work (write, read back, compare), and switched off if 2s come back.
 static const M *setCellMethod;
 static int converting;
-static int conversionMismatch;
 // The board on screen is drawn by the view from the tile objects, so a grid
 // write alone only changes the game's logic, not the picture. If the view has
 // a no-argument redraw entry point, call it after rewriting.
@@ -408,13 +407,39 @@ static long long readScore(void *mgr, void *game) {
 // because the app hides managed names from logs, not from the runtime.
 static const M *restartMethod;
 static int restartLooked;
+static int restartOnGame;
 
-static const M *findRestart(void) {
+// The exact name is not known: the app hides method names from logs, and the
+// truncated dump only shows the first 16 characters. Match by keyword instead,
+// preferring methods that take no arguments.
+static const M *findRestart(void *game) {
     if (restartLooked) return restartMethod;
     restartLooked = 1;
-    static const char *names[] = {"RestartCurrentGame", "RestartGame", "Restart", "PlayAgain", "NewGame"};
-    for (int i = 0; i < 5 && !restartMethod; i++) restartMethod = method(gmClass, names[i], 0);
-    if (diagEnabled) NSLog(@"[2048-auto] restart method %llx", (unsigned long long)(uintptr_t)restartMethod);
+    static const char *keys[] = {"restart", "playagain", "newgame", "newround", "startover"};
+    C *classes[2];
+    classes[0] = gmClass;
+    classes[1] = game ? object_class(game) : NULL;
+    for (int c = 0; c < 2 && !restartMethod; c++) {
+        C *k = classes[c];
+        if (!k) continue;
+        void *it = NULL;
+        const M *m;
+        while ((m = class_methods(k, &it))) {
+            const char *n = method_name(m);
+            if (!n || param_count(m) != 0) continue;
+            for (int i = 0; i < 5; i++) {
+                if (!containsWord(n, keys[i])) continue;
+                restartMethod = m;
+                restartOnGame = c;
+                // Encoded so the name survives os_log; useful when it fails.
+                unsigned long long e[2];
+                encName(n, e);
+                NSLog(@"[2048-auto] restart entry %llx %llx", e[0], e[1]);
+                break;
+            }
+            if (restartMethod) break;
+        }
+    }
     return restartMethod;
 }
 
@@ -657,18 +682,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             } else if (out->board[i] != expected[i])
                 added = 99;
         if (converting && diagLeft > 0) logBoard(2, expected);
-        // Our prediction is based on the rewritten board. If the game keeps
-        // disagreeing with it, the rewrite is not reaching the game's own
-        // state, so stop instead of fighting it.
-        if (converting) {
-            if (added == 1)
-                conversionMismatch = 0;
-            else if (added >= 2 && ++conversionMismatch >= 8) {
-                converting = 0;
-                solver_set_spawn_value(0);
-                NSLog(@"[2048-auto] the game ignores rewritten cells; spawns stay 2/4");
-            }
-        }
+        // A mismatch between the prediction and the board is no longer treated
+        // as "the game ignores the rewrite": playing by hand or restarting a
+        // game between our move and the read looks exactly the same. The
+        // rewrite is switched off only when a write cannot be read back.
         if (added == 1 && at >= 0 && fourOwner) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
@@ -696,12 +713,15 @@ NSString *Auto2048Restart(void) {
     void *args[] = {gmType};
     void *mgr = call(findObj, NULL, args);
     if (failedInvocation || !mgr) return @"NO";
-    const M *m = findRestart();
+    void *game = NULL;
+    field_value(mgr, currentField, &game);
+    if (failedInvocation) return @"NO";
+    const M *m = findRestart(game);
     if (!m) {
         NSLog(@"[2048-auto] restart method not found");
         return @"NO";
     }
-    call(m, mgr, NULL);
+    call(m, restartOnGame ? game : mgr, NULL);
     if (failedInvocation) return @"NO";
     // The next game over is a different game, so allow it to be written out.
     gameOverLogged = 0;

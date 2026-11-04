@@ -79,8 +79,10 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `no four-chance field and no grid setter; spawns stay 2/4` — この版ではどちらの手も使えず、
   従来通り 2 / 4 で動きます。
 - `grid write failed; spawns stay 2/4` — 書き込みを読み直せなかったため、自動で 2 / 4 に戻しました。
-- `the game ignores rewritten cells; spawns stay 2/4` — 書き換えた盤面とゲームの手が 8 回続けて
-  食い違ったため、自動で 2 / 4 に戻しました (ゲームは壊れません)。
+- `the game ignores rewritten cells; spawns stay 2/4` — **v3.7 で廃止しました**。
+  手で操作したときや、ゲームをやり直したときも「食い違い」に見えてしまうため、
+  書き換えを止める判断には使わないことにしました。書き換えが効かない場合は
+  画面の 2 と 2 が 4 に合体するので、そこで気づけます。
 - `a 2 spawned after forcing; reverting to 2/4` — 確率フィールドの推測が外れたため戻しました。
 
 ### 調査ログ（既定ではオフ）
