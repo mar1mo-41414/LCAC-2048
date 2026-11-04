@@ -113,8 +113,8 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `object <数値>` → その部品の GameObject の名前。
 - `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
   これが出ても画面が残る場合は、閉じる対象が別の部品です。
-- `scene scan: 120 objects, 2 matched` → 画面の中の部品を数えた結果。
-  続く `scene object <数値>` が、それらしい名前の部品 (パネル・ポップアップなど) です。
+- `scene scan: 69 objects, 69 matched` → 画面にある部品の数と、名前を出した数。
+  続く `scene object <数値>` がそれぞれの部品の名前です (日本語名も出ます)。
 - `scene object deactivated` → その部品を非表示にしました。
 
 ### 盤面は戻るのにゲームオーバー画面が消えない

@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.10"
-#define TWEAK_VERSION_OBJC @"v3.10"
+#define TWEAK_VERSION "v3.11"
+#define TWEAK_VERSION_OBJC @"v3.11"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -281,8 +281,28 @@ static void encManagedName(void *str, unsigned long long out[3]) {
     if (!str || !string_chars) return;
     const uint16_t *ch = string_chars(str);
     if (!ch) return;
-    for (int i = 0; i < 24 && ch[i]; i++)
-        out[i / 8] |= ((unsigned long long)(ch[i] & 0x7f)) << (7 * (i % 8));
+    // UTF-8 bytes, so Japanese names survive the 7-bit packing as well.
+    int n = 0;
+    for (int i = 0; ch[i] && n < 24; i++) {
+        unsigned int c = ch[i];
+        unsigned char b[3];
+        int k;
+        if (c < 0x80) {
+            b[0] = (unsigned char)c;
+            k = 1;
+        } else if (c < 0x800) {
+            b[0] = (unsigned char)(0xc0 | (c >> 6));
+            b[1] = (unsigned char)(0x80 | (c & 0x3f));
+            k = 2;
+        } else {
+            b[0] = (unsigned char)(0xe0 | (c >> 12));
+            b[1] = (unsigned char)(0x80 | ((c >> 6) & 0x3f));
+            b[2] = (unsigned char)(0x80 | (c & 0x3f));
+            k = 3;
+        }
+        for (int j = 0; j < k && n < 24; j++, n++)
+            out[n / 8] |= ((unsigned long long)b[j]) << (7 * (n % 8));
+    }
 }
 
 // Plain ASCII copy of a managed string (keywords only; names are ASCII).
@@ -512,12 +532,9 @@ static void scanObjects(const M *nameOf, const M *setActive) {
         if (failedInvocation || !nm) continue;
         char plain[25];
         managedName(nm, plain);
-        static const char *logged[] = {"over", "lose", "popup", "dialog", "result", "panel", "canvas",
-                                       "screen", "modal", "window"};
-        int interesting = 0;
-        for (int k = 0; k < 10 && !interesting; k++)
-            if (containsWord(plain, logged[k])) interesting = 1;
-        if (!interesting || hits >= 40) continue;
+        // Every name is written out: the object that carries the game over
+        // panel has a name that none of the obvious keywords match.
+        if (hits >= 90) continue;
         unsigned long long c[3] = {0, 0, 0};
         encManagedName(nm, c);
         NSLog(@"[2048-auto] scene object %llx %llx %llx", c[0], c[1], c[2]);
@@ -915,6 +932,8 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         for (int i = 0; i < 16; i++)
             if (board[i]) tiles++;
         NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        void *view = call(viewInstance, NULL, NULL);
+        if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
         probePanels();
     }
     noteGameOver(board, mgr, game);
