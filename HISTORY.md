@@ -15,6 +15,21 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.12 ビルド: 階層でゲームオーバー画面を特定
+- 親の名前をとったことで、画面の構成が分かった。
+
+  ```
+  UI > Gameboard ipadVariant(Clone) > RatioFitter > Gameboard_Bg, GameTiles_Container, InputZone
+  MenuManager > ClassicRegularGameHud > Body > LayoutParent > Logo, ScoreContainer,
+                                                            BestScoreContainer, HudHelpText
+  Managers > Grid View, CoreManagers, ...
+  ```
+
+- ゲームオーバー画面は `ClassicRegularGameHud` の下の **`Body`**。ロゴ・スコア・
+  「メニュー」「ランキング」ボタンをまとめた入れ物で、プレイ中は非表示になっている。
+- v3.13 では再挑戦のあとにこの `Body` を `SetActive(false)` で閉じる。
+  1 フレーム後に出し直される場合に備えて、次の 2 回の読み取りでもう一度確認する。
+
 ### 実機の v3.11 ビルド: 68 個の名前を全部とった
 - 内訳はタイル (GameTile / Gametile_Bg / Num_Txt)、盤面 (Gameboard_Bg / GameTiles_Container)、
   スコア表示 (ScoreText / BestScoreContainer)、メニュー (MenuButton / LeaderboardsButton / Logo)、

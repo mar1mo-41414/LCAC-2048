@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.12"
-#define TWEAK_VERSION_OBJC @"v3.12"
+#define TWEAK_VERSION "v3.13"
+#define TWEAK_VERSION_OBJC @"v3.13"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -493,19 +493,30 @@ static int restartLooked;
 // actually took effect.
 static int restartPending;
 
-// The game over panel is a UI object with no link from the model. Rather than
-// guessing which class owns it, walk the objects in the scene and look at their
-// names. Names are English even when the labels on screen are not.
-static void scanObjects(const M *nameOf, const M *setActive) {
-    if (!nameOf || !setActive || !class_type || !type_object) return;
+// The game over screen is not part of the model, so restarting the model leaves
+// it on screen. The scene tree says which object it is:
+//
+//   MenuManager > ClassicRegularGameHud > Body > LayoutParent > Logo,
+//                                                              ScoreContainer,
+//                                                              BestScoreContainer, ...
+//
+// "Body" is the overlay that carries the logo, the score and the buttons. It is
+// off while a game is running, so it has to be switched off again after the
+// model has been restarted for the player.
+static int overlayHidesLeft;
+
+static void hideGameOverOverlay(BOOL verbose) {
     C *goClass = findClass("UnityEngine", "GameObject");
     C *objClass = findClass("UnityEngine", "Object");
     C *compClass = findClass("UnityEngine", "Component");
     C *trClass = findClass("UnityEngine", "Transform");
-    if (!goClass || !objClass) return;
+    if (!goClass || !objClass || !compClass || !trClass) return;
+    const M *nameOf = method(objClass, "get_name", 0);
+    const M *setActive = method(goClass, "SetActive", 1);
     const M *goTransform = method(goClass, "get_transform", 0);
     const M *getParent = method(trClass, "get_parent", 0);
     const M *getGameObject = method(compClass, "get_gameObject", 0);
+    if (!nameOf || !setActive || !goTransform || !getParent || !getGameObject) return;
     const M *findAll = NULL;
     void *it = NULL;
     const M *candidate;
@@ -516,192 +527,46 @@ static void scanObjects(const M *nameOf, const M *setActive) {
         findAll = candidate;
         break;
     }
-    if (!findAll) {
-        NSLog(@"[2048-auto] scene scan unavailable");
-        return;
-    }
+    if (!findAll || !class_type || !type_object) return;
     void *typeObj = type_object(class_type(goClass));
     if (!typeObj) return;
     void *par[] = {typeObj};
     void *arr = call(findAll, NULL, par);
-    if (failedInvocation || !arr) {
-        NSLog(@"[2048-auto] scene scan failed");
-        return;
-    }
+    if (failedInvocation || !arr) return;
     int total = managedCount(arr);
-    int hits = 0;
+    int hidden = 0;
     for (int i = 0; i < total && i < 400; i++) {
         void *go = managedItem(arr, i);
         if (!go) continue;
         void *nm = call(nameOf, go, NULL);
         if (failedInvocation || !nm) continue;
-        char plain[25];
+        char plain[25], parent[25] = {0};
         managedName(nm, plain);
-        // Every name is written out: the object that carries the game over
-        // panel has a name that none of the obvious keywords match.
-        if (hits >= 90) continue;
-        unsigned long long c[3] = {0, 0, 0}, pc[3] = {0, 0, 0};
-        encManagedName(nm, c);
-        // The parent name is what makes the flat list readable: the game over
-        // screen is a branch of the tree, not an object with an obvious name.
-        void *tr = goTransform ? call(goTransform, go, NULL) : NULL;
-        void *par = tr && getParent ? call(getParent, tr, NULL) : NULL;
-        void *pgo = par && getGameObject ? call(getGameObject, par, NULL) : NULL;
-        void *pnm = pgo ? call(nameOf, pgo, NULL) : NULL;
-        if (!failedInvocation && pnm) encManagedName(pnm, pc);
-        NSLog(@"[2048-auto] scene object %llx %llx %llx in %llx %llx %llx", c[0], c[1], c[2], pc[0], pc[1],
-              pc[2]);
-        hits++;
-        // Only the "you lost" style overlays are switched off: a live panel or
-        // canvas may well be the whole screen.
-        if (containsWord(plain, "over") || containsWord(plain, "lose") || containsWord(plain, "popup") ||
-            containsWord(plain, "dialog")) {
-            uint8_t off = 0;
-            void *p[] = {&off};
-            call(setActive, go, p);
-            NSLog(@"[2048-auto] scene object deactivated");
+        void *tr = call(goTransform, go, NULL);
+        void *up = tr ? call(getParent, tr, NULL) : NULL;
+        void *ugo = up ? call(getGameObject, up, NULL) : NULL;
+        void *unm = ugo ? call(nameOf, ugo, NULL) : NULL;
+        if (unm && !failedInvocation) managedName(unm, parent);
+        // "Body" inside a HUD is the game over screen.
+        BOOL overlay = (BOOL)(containsWord(parent, "hud") && !strcmp(plain, "Body"));
+        // Older guesses, kept in case another build names it directly.
+        if (containsWord(plain, "gameover") || containsWord(plain, "lose") || containsWord(plain, "popup") ||
+            containsWord(plain, "dialog"))
+            overlay = YES;
+        if (!overlay) continue;
+        if (verbose) {
+            unsigned long long c[3] = {0, 0, 0}, pc[3] = {0, 0, 0};
+            encManagedName(nm, c);
+            if (unm) encManagedName(unm, pc);
+            NSLog(@"[2048-auto] overlay %llx %llx %llx in %llx %llx %llx", c[0], c[1], c[2], pc[0], pc[1],
+                  pc[2]);
         }
+        uint8_t off = 0;
+        void *p[] = {&off};
+        call(setActive, go, p);
+        hidden++;
     }
-    NSLog(@"[2048-auto] scene scan: %d objects, %d matched", total, hits);
-}
-
-// The object names in the scene are the only handles available, and Unity
-// usually names the component class after the prefab. Try the plausible ones.
-static C *findClassAny(const char *name) {
-    static const char *spaces[] = {"", "Game2048", "Game2048.UI", "Game2048.GameModes",
-                                   "Game2048.GameScreens", "Game2048.Views"};
-    for (int i = 0; i < 6; i++) {
-        C *k = findClass(spaces[i], name);
-        if (k) return k;
-    }
-    return NULL;
-}
-
-// Logs the methods that could hide the "you lost" overlay, and calls the most
-// specific one right away: if the guess is right the panel disappears now.
-static void probeUiClass(const char *name, int tag) {
-    C *k = findClassAny(name);
-    if (!k) return;
-    unsigned long long a[3] = {0, 0, 0};
-    encName3(name, a);
-    NSLog(@"[2048-auto] class %d found %llx %llx %llx", tag, a[0], a[1], a[2]);
-    void *it = NULL;
-    const M *m;
-    while ((m = class_methods(k, &it))) {
-        const char *nm = method_name(m);
-        if (!nm || param_count(m) > 1) continue;
-        if (!containsWord(nm, "over") && !containsWord(nm, "lose") && !containsWord(nm, "gameended") &&
-            !containsWord(nm, "hide") && !containsWord(nm, "close") && !containsWord(nm, "dismiss") &&
-            !containsWord(nm, "show") && !containsWord(nm, "again"))
-            continue;
-        unsigned long long b[3] = {0, 0, 0};
-        encName3(nm, b);
-        NSLog(@"[2048-auto] class %d method %d %llx %llx %llx", tag, (int)param_count(m), b[0], b[1], b[2]);
-        if (param_count(m) == 0 &&
-            (containsWord(nm, "over") || containsWord(nm, "lose") || containsWord(nm, "gameended"))) {
-            void *t = type_object(class_type(k));
-            if (!t) continue;
-            void *par[] = {t};
-            void *inst = call(findObj, NULL, par);
-            if (!inst || failedInvocation) continue;
-            call(m, inst, NULL);
-            NSLog(@"[2048-auto] overlay hide called");
-        }
-    }
-}
-
-static void probeUiClasses(void) {
-    static const char *names[] = {"ClassicRegularGameHud", "Gameboard", "MenuManager", "PopupManager",
-                                  "GameOverView"};
-    for (int i = 0; i < 5; i++) probeUiClass(names[i], i + 6);
-}
-
-// The game over panel is a UI object, not part of the model. Restarting the
-// model therefore leaves the panel on screen, and the model can only be moved
-// by the tweak while the player sees a frozen board. Find the panel on the view
-// manager and try to close it.
-static void probePanels(void) {
-    if (!class_fields || !field_name || !field_type || !type_get_name || !field_value) return;
-    C *goClass = findClass("UnityEngine", "GameObject");
-    // get_name is declared on UnityEngine.Object, which GameObject inherits,
-    // so a name/arity lookup on GameObject itself finds nothing.
-    const M *nameOf = method(findClass("UnityEngine", "Object"), "get_name", 0);
-    const M *setActive = method(goClass, "SetActive", 1);
-    const M *getComponentObject = method(findClass("UnityEngine", "Component"), "get_gameObject", 0);
-    scanObjects(nameOf, setActive);
-    probeUiClasses();
-    void *view = call(viewInstance, NULL, NULL);
-    if (!view || failedInvocation) return;
-    void *it = NULL;
-    const void *f;
-    int shown = 0;
-    while ((f = class_fields(viewClass, &it)) && shown < 40) {
-        const char *fn = field_name(f);
-        const void *ft = field_type(f);
-        const char *tn = ft ? type_get_name(ft) : NULL;
-        if (!fn) continue;
-        unsigned long long a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
-        encName3(fn, a);
-        encName3(tn, b);
-        NSLog(@"[2048-auto] field %llx %llx %llx / %llx %llx %llx", a[0], a[1], a[2], b[0], b[1], b[2]);
-        shown++;
-        if (!tn) continue;
-        if (!containsWord(tn, "over") && !containsWord(tn, "panel") && !containsWord(tn, "popup") &&
-            !containsWord(tn, "dialog"))
-            continue;
-        void *val = NULL;
-        field_value(view, (F *)f, &val);
-        if (val && tn && containsWord(tn, "GameObject") && nameOf) {
-            // The field is a plain GameObject: its name says what it is.
-            void *nm = call(nameOf, val, NULL);
-            unsigned long long c[3] = {0, 0, 0};
-            char plain[25] = {0};
-            if (!failedInvocation && nm) {
-                encManagedName(nm, c);
-                managedName(nm, plain);
-                NSLog(@"[2048-auto] object %llx %llx %llx", c[0], c[1], c[2]);
-            }
-            if (setActive && (containsWord(plain, "over") || containsWord(plain, "popup") ||
-                              containsWord(plain, "dialog") || containsWord(plain, "panel"))) {
-                uint8_t off = 0;
-                void *par[] = {&off};
-                call(setActive, val, par);
-                NSLog(@"[2048-auto] object deactivated");
-            }
-            continue;
-        }
-        if (!val) {
-            NSLog(@"[2048-auto] panel field is empty");
-            continue;
-        }
-        C *k = object_class(val);
-        void *mit = NULL;
-        const M *m;
-        int done = 0;
-        while ((m = class_methods(k, &mit))) {
-            const char *mn = method_name(m);
-            if (!mn || param_count(m) != 0) continue;
-            if (!containsWord(mn, "hide") && !containsWord(mn, "close") && !containsWord(mn, "dismiss")) continue;
-            unsigned long long c[3] = {0, 0, 0};
-            encName3(mn, c);
-            NSLog(@"[2048-auto] panel hide %llx %llx %llx", c[0], c[1], c[2]);
-            call(m, val, NULL);
-            done = 1;
-            break;
-        }
-        if (!done && getComponentObject && setActive) {
-            // No hide/close method: switch the panel's GameObject off instead.
-            void *go = call(getComponentObject, val, NULL);
-            if (go && !failedInvocation) {
-                uint8_t off = 0;
-                void *par[] = {&off};
-                call(setActive, go, par);
-                NSLog(@"[2048-auto] panel deactivated");
-            }
-        } else if (!done) {
-            NSLog(@"[2048-auto] panel hide method not found");
-        }
-    }
+    NSLog(@"[2048-auto] overlay hidden (%d of %d objects)", hidden, total);
 }
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
@@ -991,6 +856,11 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    // The game may put the panel back a frame later, so sweep a couple of times.
+    if (overlayHidesLeft > 0) {
+        overlayHidesLeft--;
+        hideGameOverOverlay(NO);
+    }
     if (restartPending) {
         restartPending = 0;
         int tiles = 0;
@@ -999,7 +869,8 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
         void *view = call(viewInstance, NULL, NULL);
         if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
-        probePanels();
+        hideGameOverOverlay(YES);
+        overlayHidesLeft = 2;
     }
     noteGameOver(board, mgr, game);
     if (diagLeft > 0) {
