@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.11"
-#define TWEAK_VERSION_OBJC @"v3.11"
+#define TWEAK_VERSION "v3.12"
+#define TWEAK_VERSION_OBJC @"v3.12"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -500,7 +500,12 @@ static void scanObjects(const M *nameOf, const M *setActive) {
     if (!nameOf || !setActive || !class_type || !type_object) return;
     C *goClass = findClass("UnityEngine", "GameObject");
     C *objClass = findClass("UnityEngine", "Object");
+    C *compClass = findClass("UnityEngine", "Component");
+    C *trClass = findClass("UnityEngine", "Transform");
     if (!goClass || !objClass) return;
+    const M *goTransform = method(goClass, "get_transform", 0);
+    const M *getParent = method(trClass, "get_parent", 0);
+    const M *getGameObject = method(compClass, "get_gameObject", 0);
     const M *findAll = NULL;
     void *it = NULL;
     const M *candidate;
@@ -535,9 +540,17 @@ static void scanObjects(const M *nameOf, const M *setActive) {
         // Every name is written out: the object that carries the game over
         // panel has a name that none of the obvious keywords match.
         if (hits >= 90) continue;
-        unsigned long long c[3] = {0, 0, 0};
+        unsigned long long c[3] = {0, 0, 0}, pc[3] = {0, 0, 0};
         encManagedName(nm, c);
-        NSLog(@"[2048-auto] scene object %llx %llx %llx", c[0], c[1], c[2]);
+        // The parent name is what makes the flat list readable: the game over
+        // screen is a branch of the tree, not an object with an obvious name.
+        void *tr = goTransform ? call(goTransform, go, NULL) : NULL;
+        void *par = tr && getParent ? call(getParent, tr, NULL) : NULL;
+        void *pgo = par && getGameObject ? call(getGameObject, par, NULL) : NULL;
+        void *pnm = pgo ? call(nameOf, pgo, NULL) : NULL;
+        if (!failedInvocation && pnm) encManagedName(pnm, pc);
+        NSLog(@"[2048-auto] scene object %llx %llx %llx in %llx %llx %llx", c[0], c[1], c[2], pc[0], pc[1],
+              pc[2]);
         hits++;
         // Only the "you lost" style overlays are switched off: a live panel or
         // canvas may well be the whole screen.
@@ -550,6 +563,57 @@ static void scanObjects(const M *nameOf, const M *setActive) {
         }
     }
     NSLog(@"[2048-auto] scene scan: %d objects, %d matched", total, hits);
+}
+
+// The object names in the scene are the only handles available, and Unity
+// usually names the component class after the prefab. Try the plausible ones.
+static C *findClassAny(const char *name) {
+    static const char *spaces[] = {"", "Game2048", "Game2048.UI", "Game2048.GameModes",
+                                   "Game2048.GameScreens", "Game2048.Views"};
+    for (int i = 0; i < 6; i++) {
+        C *k = findClass(spaces[i], name);
+        if (k) return k;
+    }
+    return NULL;
+}
+
+// Logs the methods that could hide the "you lost" overlay, and calls the most
+// specific one right away: if the guess is right the panel disappears now.
+static void probeUiClass(const char *name, int tag) {
+    C *k = findClassAny(name);
+    if (!k) return;
+    unsigned long long a[3] = {0, 0, 0};
+    encName3(name, a);
+    NSLog(@"[2048-auto] class %d found %llx %llx %llx", tag, a[0], a[1], a[2]);
+    void *it = NULL;
+    const M *m;
+    while ((m = class_methods(k, &it))) {
+        const char *nm = method_name(m);
+        if (!nm || param_count(m) > 1) continue;
+        if (!containsWord(nm, "over") && !containsWord(nm, "lose") && !containsWord(nm, "gameended") &&
+            !containsWord(nm, "hide") && !containsWord(nm, "close") && !containsWord(nm, "dismiss") &&
+            !containsWord(nm, "show") && !containsWord(nm, "again"))
+            continue;
+        unsigned long long b[3] = {0, 0, 0};
+        encName3(nm, b);
+        NSLog(@"[2048-auto] class %d method %d %llx %llx %llx", tag, (int)param_count(m), b[0], b[1], b[2]);
+        if (param_count(m) == 0 &&
+            (containsWord(nm, "over") || containsWord(nm, "lose") || containsWord(nm, "gameended"))) {
+            void *t = type_object(class_type(k));
+            if (!t) continue;
+            void *par[] = {t};
+            void *inst = call(findObj, NULL, par);
+            if (!inst || failedInvocation) continue;
+            call(m, inst, NULL);
+            NSLog(@"[2048-auto] overlay hide called");
+        }
+    }
+}
+
+static void probeUiClasses(void) {
+    static const char *names[] = {"ClassicRegularGameHud", "Gameboard", "MenuManager", "PopupManager",
+                                  "GameOverView"};
+    for (int i = 0; i < 5; i++) probeUiClass(names[i], i + 6);
 }
 
 // The game over panel is a UI object, not part of the model. Restarting the
@@ -565,6 +629,7 @@ static void probePanels(void) {
     const M *setActive = method(goClass, "SetActive", 1);
     const M *getComponentObject = method(findClass("UnityEngine", "Component"), "get_gameObject", 0);
     scanObjects(nameOf, setActive);
+    probeUiClasses();
     void *view = call(viewInstance, NULL, NULL);
     if (!view || failedInvocation) return;
     void *it = NULL;

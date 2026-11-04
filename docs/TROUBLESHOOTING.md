@@ -113,8 +113,11 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `object <数値>` → その部品の GameObject の名前。
 - `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
   これが出ても画面が残る場合は、閉じる対象が別の部品です。
-- `scene scan: 69 objects, 69 matched` → 画面にある部品の数と、名前を出した数。
-  続く `scene object <数値>` がそれぞれの部品の名前です (日本語名も出ます)。
+- `scene scan: 68 objects, 68 matched` → 画面にある部品の数と、名前を出した数。
+  続く `scene object <名前> in <親>` が、それぞれの部品名と親の名前です。
+- `class 6 found <名前>` → 画面のクラスが見つかった印。続く `class 6 method …` が
+  そのクラスの、画面を消せそうな処理の一覧です。
+- `overlay hide called` → その処理を実際に呼んだ、という合図です。
 - `scene object deactivated` → その部品を非表示にしました。
 
 ### 盤面は戻るのにゲームオーバー画面が消えない

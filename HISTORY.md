@@ -15,6 +15,14 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.11 ビルド: 68 個の名前を全部とった
+- 内訳はタイル (GameTile / Gametile_Bg / Num_Txt)、盤面 (Gameboard_Bg / GameTiles_Container)、
+  スコア表示 (ScoreText / BestScoreContainer)、メニュー (MenuButton / LeaderboardsButton / Logo)、
+  それに `ClassicRegularGameHud` などの管理役。**ゲームオーバー専用の名前は無い**。
+- 画面は名前ではなく**階層**で見ないと分からないため、v3.12 では各部品の親の名前も出す。
+- あわせて `ClassicRegularGameHud` / `Gameboard` / `MenuManager` などのクラスを探し、
+  `lose` / `over` / `hide` 系の処理を一覧し、そのうち `lose` / `over` のものを実際に呼ぶ。
+
 ### 実機の v3.10 ビルド: 名前で当てるのは無理だった
 - シーンの GameObject は 69 個。`over` / `lose` / `popup` / `dialog` / `panel` / `canvas` などを
   含む名前は **`LoadingScreen` だけ**だった。ゲームオーバー画面は名前で判別できない。
