@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.16"
-#define TWEAK_VERSION_OBJC @"v3.16"
+#define TWEAK_VERSION "v3.17"
+#define TWEAK_VERSION_OBJC @"v3.17"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -306,13 +306,15 @@ static void encManagedName(void *str, unsigned long long out[3]) {
 }
 
 // Plain ASCII copy of a managed string (keywords only; names are ASCII).
-static void managedName(void *str, char out[25]) {
+// Long enough for names like "ClassicRegularGameLoseScreen": a keyword can sit
+// far past the 24 characters that are logged.
+static void managedName(void *str, char out[64]) {
     out[0] = 0;
     if (!str || !string_chars) return;
     const uint16_t *ch = string_chars(str);
     if (!ch) return;
     int i = 0;
-    for (; i < 24 && ch[i]; i++) out[i] = (char)(ch[i] & 0x7f);
+    for (; i < 63 && ch[i]; i++) out[i] = (char)(ch[i] & 0x7f);
     out[i] = 0;
 }
 
@@ -504,31 +506,7 @@ static int restartPending;
 // off while a game is running, so it has to be switched off again after the
 // model has been restarted for the player.
 static int overlayHidesLeft;
-static int overlayRestorePending;
 static C *objClassRef;
-
-// Resources.FindObjectsOfTypeAll(Type): same, but includes switched-off objects.
-// Needed to switch the HUD back on after it has been hidden.
-static void *findAllIncludingInactive(C *k) {
-    if (!k || !class_type || !type_object) return NULL;
-    C *resources = findClass("UnityEngine", "Resources");
-    if (!resources) return NULL;
-    const M *all = NULL;
-    void *it = NULL;
-    const M *candidate;
-    while ((candidate = class_methods(resources, &it))) {
-        const char *n = method_name(candidate);
-        if (!n || strcmp(n, "FindObjectsOfTypeAll") || param_count(candidate) != 1) continue;
-        all = candidate;
-        break;
-    }
-    if (!all) return NULL;
-    void *typeObj = type_object(class_type(k));
-    if (!typeObj) return NULL;
-    void *par[] = {typeObj};
-    void *arr = call(all, NULL, par);
-    return failedInvocation ? NULL : arr;
-}
 
 // Object.FindObjectsOfType(Type): every object of a class that is in the scene.
 static void *findAllOf(C *k) {
@@ -562,20 +540,21 @@ static void logFrame(const char *tag) {
     NSLog(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
 }
 
-static void setOverlayActive(BOOL active, BOOL verbose) {
+// The game over screen has a name of its own after all:
+//
+//   MenuManager > ClassicRegularGameLoseScreen   (regular games)
+//                 ClassicChallengeLoseScreen     (daily challenge)
+//
+// Only those are switched off. The HUD (score, menu, leaderboard) lives in a
+// different object and must stay visible.
+static void hideLoseScreen(BOOL verbose) {
     C *goClass = findClass("UnityEngine", "GameObject");
     C *objClass = objClassRef = findClass("UnityEngine", "Object");
-    C *compClass = findClass("UnityEngine", "Component");
-    C *trClass = findClass("UnityEngine", "Transform");
-    if (!goClass || !objClass || !compClass || !trClass) return;
+    if (!goClass || !objClass) return;
     const M *nameOf = method(objClass, "get_name", 0);
     const M *setActive = method(goClass, "SetActive", 1);
-    const M *goTransform = method(goClass, "get_transform", 0);
-    const M *getParent = method(trClass, "get_parent", 0);
-    const M *getGameObject = method(compClass, "get_gameObject", 0);
-    if (!nameOf || !setActive || !goTransform || !getParent || !getGameObject) return;
-    void *arr = findAllIncludingInactive(goClass);
-    if (!arr) arr = findAllOf(goClass);
+    if (!nameOf || !setActive) return;
+    void *arr = findAllOf(goClass);
     if (!arr) return;
     int total = managedCount(arr);
     int hidden = 0;
@@ -584,41 +563,20 @@ static void setOverlayActive(BOOL active, BOOL verbose) {
         if (!go) continue;
         void *nm = call(nameOf, go, NULL);
         if (failedInvocation || !nm) continue;
-        char plain[25], parent[25] = {0};
+        char plain[64];
         managedName(nm, plain);
-        void *tr = call(goTransform, go, NULL);
-        void *up = tr ? call(getParent, tr, NULL) : NULL;
-        void *ugo = up ? call(getGameObject, up, NULL) : NULL;
-        void *unm = ugo ? call(nameOf, ugo, NULL) : NULL;
-        if (unm && !failedInvocation) managedName(unm, parent);
-        // "Body" inside a HUD is the game over screen.
-        BOOL overlay = (BOOL)(containsWord(parent, "hud") && !strcmp(plain, "Body"));
-        // Older guesses, kept in case another build names it directly.
-        if (containsWord(plain, "gameover") || containsWord(plain, "lose") || containsWord(plain, "popup") ||
-            containsWord(plain, "dialog"))
-            overlay = YES;
-        if (!overlay) continue;
-        int isActive = 1;
-        const M *getActive = method(goClass, "get_activeSelf", 0);
-        if (getActive) {
-            void *ab = call(getActive, go, NULL);
-            if (!failedInvocation && ab) isActive = *(uint8_t *)unbox(ab);
-        }
-        if (active == (BOOL)isActive) continue;  // already in the wanted state
+        if (!containsWord(plain, "losescreen") && !containsWord(plain, "gameover")) continue;
         if (verbose) {
-            unsigned long long c[3] = {0, 0, 0}, pc[3] = {0, 0, 0};
+            unsigned long long c[3] = {0, 0, 0};
             encManagedName(nm, c);
-            if (unm) encManagedName(unm, pc);
-            NSLog(@"[2048-auto] overlay %llx %llx %llx in %llx %llx %llx", c[0], c[1], c[2], pc[0], pc[1],
-                  pc[2]);
+            NSLog(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
         }
-        uint8_t on = active ? 1 : 0;
-        void *p[] = {&on};
+        uint8_t off = 0;
+        void *p[] = {&off};
         call(setActive, go, p);
         hidden++;
     }
-    if (hidden || verbose)
-        NSLog(@"[2048-auto] overlay %s (%d of %d objects)", active ? "shown" : "hidden", hidden, total);
+    if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
 }
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
@@ -911,12 +869,8 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     // The game may put the panel back a frame later, so sweep a couple of times.
     if (overlayHidesLeft > 0) {
         overlayHidesLeft--;
-        setOverlayActive(NO, NO);
-        if (overlayHidesLeft == 7) logFrame("sweep");
-    } else if (overlayRestorePending) {
-        // The game over screen is gone by now; put the score and menu back.
-        overlayRestorePending = 0;
-        setOverlayActive(YES, YES);
+        hideLoseScreen(NO);
+        if (overlayHidesLeft == 58) logFrame("sweep");
     }
     if (restartPending) {
         restartPending = 0;
@@ -926,13 +880,12 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
         void *view = call(viewInstance, NULL, NULL);
         if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
-        setOverlayActive(NO, YES);
+        hideLoseScreen(YES);
         logFrame("after hide");
-        // The panel comes back once the game has finished its own game over
-        // animation, so keep hiding it for a few seconds. Then the HUD is put
-        // back, otherwise the score and the menu stay away as well.
-        overlayHidesLeft = 9;
-        overlayRestorePending = 1;
+        // The game shows the screen again once its own game over animation has
+        // finished, so keep watching for a while. Only the lose screen is
+        // touched, so this costs nothing on screen.
+        overlayHidesLeft = 60;
     }
     noteGameOver(board, mgr, game);
     if (diagLeft > 0) {

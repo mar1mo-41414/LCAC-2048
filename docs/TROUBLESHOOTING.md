@@ -113,14 +113,12 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `object <数値>` → その部品の GameObject の名前。
 - `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
   これが出ても画面が残る場合は、閉じる対象が別の部品です。
-- `overlay <名前> in <親>` → ゲームオーバー画面として閉じた部品 (名前と親)。
-- `overlay hidden (1 of 69 objects)` → 閉じた部品の数。`0` なら見つかっていません。
+- `lose screen <名前>` → 閉じたゲームオーバー画面 (`ClassicRegularGameLoseScreen`)。
+- `lose screen hidden (1 of 71 objects)` → 閉じた数。`0` なら見つかっていません。
 - `frame 12345 after hide` / `frame 12345 sweep` → ゲームのフレーム番号。
   再挑戦の後にこの数字が進んでいなければ、画面が描き直されていません。
-- 再挑戦のあと数秒間は `overlay` の走査を続けます。ゲームが後からパネルを出し直した
-  場合も、その場で閉じます (閉じたときだけ `overlay hidden` が出ます)。
-- `overlay shown (1 of N objects)` → パネルが消えたあと、スコアとメニューを戻した合図。
-  これが出ないと、スコア表示が無いままになります。
+- 再挑戦のあと約 20 秒は走査を続けます。ゲームが後から画面を出し直した場合も閉じます
+  (閉じたときだけ `lose screen hidden` が出ます)。スコアやメニューは触りません。
 - `scene object deactivated` → その部品を非表示にしました。
 
 ### 盤面は戻るのにゲームオーバー画面が消えない
