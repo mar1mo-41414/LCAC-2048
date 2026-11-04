@@ -45,10 +45,8 @@ static C *(*class_element)(C *);
 static C *(*class_parent)(C *);
 static const char *(*class_name)(C *);
 static const void *(*method_ret)(const M *);
-static void *(*class_fields)(C *, void **);
 static uint16_t *(*string_chars)(void *);
-static const char *(*field_name)(const void *);
-static const void *(*field_type)(const void *);
+
 static const void *(*method_param)(const M *, uint32_t);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
@@ -121,7 +119,6 @@ static BOOL initEngine(void) {
     LOAD(unbox, "il2cpp_object_unbox");
     LOAD(corlib, "il2cpp_get_corlib");
 
-    *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
     *(void **)(&string_chars) = dlsym(RTLD_DEFAULT, "il2cpp_string_chars");
     *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
     *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
@@ -490,7 +487,7 @@ static void probePanels(void) {
             !containsWord(tn, "dialog"))
             continue;
         void *val = NULL;
-        field_value(view, f, &val);
+        field_value(view, (F *)f, &val);
         if (val && tn && containsWord(tn, "GameObject") && nameOf) {
             // The field is a plain GameObject: its name says what it is.
             void *nm = call(nameOf, val, NULL);
