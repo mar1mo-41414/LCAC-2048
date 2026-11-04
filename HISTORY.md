@@ -15,6 +15,23 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.14 ビルド: 画面の構成とフレーム
+- フレーム番号は 53827 → 53850 と進んでいた (描画は止まっていない)。
+- Canvas は 4 つ。
+
+  | Canvas | 中身 |
+  | --- | --- |
+  | `Gameboard ipadVariant(Clone)` | 盤面 (Gameboard_Bg / GameTiles_Container / InputZone) |
+  | `ClassicRegularGameHud` | `Body` (非表示) > `LayoutParent` > Logo, ScoreContainer, BestScoreContainer |
+  | `LoadingScreen` | WhiteBackground, Spinner |
+  | `UI` | Background, LoadingScreen, FPSCanvas, Gameboard … |
+
+- ゲームオーバー専用の Canvas や部品は無い。`Body` を閉じても画面が残るのは、
+  **ゲームが自分のゲームオーバー演出のあとで `Body` を出し直している**ためと考えられる
+  (閉じた直後の 0.4 秒では `Body` は非表示のままだった)。
+- v3.15 では再挑戦のあと約 10 秒間、走査を続けて出し直されても閉じる。
+  出し直しが続く場合は毎回閉じるので、見た目は消えたままになる。
+
 ### 実機の v3.13 ビルド: Body を閉じても画面は残った
 - `overlay hidden (1 of 68 objects)` のあと、次の走査では `(0 of 53 objects)`。
   **Body は確かに閉じている** (子 15 個が非表示になり 68 → 53) のに、画面のパネルは残った。
