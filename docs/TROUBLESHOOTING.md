@@ -113,6 +113,10 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `object <数値>` → その部品の GameObject の名前。
 - `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
   これが出ても画面が残る場合は、閉じる対象が別の部品です。
+- `restart entry N kept` → 実際に効いた再開の処理を以後ずっと使う、という合図。
+  これが出ないまま 2 回目以降のゲームオーバーで止まるなら、再開の処理が効いていません。
+- `game stuck; asking for a restart` → ゲームが「入力を受け付けない」まま数秒たったので、
+  強制的に再開を試した合図 (盤面はまだ動かせる状態なのに画面が止まっている場合)。
 - `lose screen <名前>` → 閉じたゲームオーバー画面 (`ClassicRegularGameLoseScreen`)。
 - `lose screen hidden (1 of 71 objects)` → 閉じた数。`0` なら見つかっていません。
 - `frame 12345 after hide` / `frame 12345 sweep` → ゲームのフレーム番号。
