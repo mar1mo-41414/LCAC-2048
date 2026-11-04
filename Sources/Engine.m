@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.17"
-#define TWEAK_VERSION_OBJC @"v3.17"
+#define TWEAK_VERSION "v3.18"
+#define TWEAK_VERSION_OBJC @"v3.18"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -547,6 +547,69 @@ static void logFrame(const char *tag) {
 //
 // Only those are switched off. The HUD (score, menu, leaderboard) lives in a
 // different object and must stay visible.
+// The HUD switches itself off when the game ends, and the game only switches it
+// back on when it starts a game by itself. It is a sibling of the lose screen:
+//
+//   MenuManager > ClassicRegularGameHud > Body     (score, menu, leaderboard)
+//               > ClassicRegularGameLoseScreen
+//
+// Walking the parent's children works even while they are switched off.
+static void showHudBeside(void *loseScreen) {
+    C *goClass = findClass("UnityEngine", "GameObject");
+    C *compClass = findClass("UnityEngine", "Component");
+    C *trClass = findClass("UnityEngine", "Transform");
+    if (!goClass || !compClass || !trClass || !string_chars) return;
+    const M *goTransform = method(goClass, "get_transform", 0);
+    const M *setActive = method(goClass, "SetActive", 1);
+    const M *getParent = method(trClass, "get_parent", 0);
+    const M *getChildCount = method(trClass, "get_childCount", 0);
+    const M *getChild = method(trClass, "GetChild", 1);
+    const M *getGameObject = method(compClass, "get_gameObject", 0);
+    const M *nameOf = method(objClassRef, "get_name", 0);
+    if (!goTransform || !setActive || !getParent || !getChildCount || !getChild || !getGameObject || !nameOf)
+        return;
+    void *tr = call(goTransform, loseScreen, NULL);
+    void *up = tr ? call(getParent, tr, NULL) : NULL;
+    if (!up || failedInvocation) return;
+    void *cnt = call(getChildCount, up, NULL);
+    if (failedInvocation || !cnt) return;
+    int n = *(int32_t *)unbox(cnt);
+    for (int i = 0; i < n; i++) {
+        int32_t idx = i;
+        void *par[] = {&idx};
+        void *child = call(getChild, up, par);
+        if (failedInvocation || !child) continue;
+        void *go = call(getGameObject, child, NULL);
+        void *nm = go ? call(nameOf, go, NULL) : NULL;
+        if (!nm || failedInvocation) continue;
+        char plain[64];
+        managedName(nm, plain);
+        if (!containsWord(plain, "hud")) continue;
+        uint8_t on = 1;
+        void *p[] = {&on};
+        call(setActive, go, p);
+        // ...and the body inside it, which is the part that disappears.
+        void *cc = call(getChildCount, child, NULL);
+        if (failedInvocation || !cc) continue;
+        int m = *(int32_t *)unbox(cc);
+        for (int j = 0; j < m; j++) {
+            int32_t k = j;
+            void *par2[] = {&k};
+            void *sub = call(getChild, child, par2);
+            if (failedInvocation || !sub) continue;
+            void *sgo = call(getGameObject, sub, NULL);
+            void *snm = sgo ? call(nameOf, sgo, NULL) : NULL;
+            if (!snm || failedInvocation) continue;
+            char sp[64];
+            managedName(snm, sp);
+            if (strcmp(sp, "Body")) continue;
+            void *p2[] = {&on};
+            call(setActive, sgo, p2);
+        }
+        NSLog(@"[2048-auto] hud shown");
+    }
+}
+
 static void hideLoseScreen(BOOL verbose) {
     C *goClass = findClass("UnityEngine", "GameObject");
     C *objClass = objClassRef = findClass("UnityEngine", "Object");
@@ -575,6 +638,7 @@ static void hideLoseScreen(BOOL verbose) {
         void *p[] = {&off};
         call(setActive, go, p);
         hidden++;
+        showHudBeside(go);
     }
     if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
 }
