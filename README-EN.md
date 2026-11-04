@@ -59,6 +59,23 @@ The game and its IPA are not included.
   search result was discarded. All three are normal.
 - The 2048 achievement screen shows `PAUSE`. If AUTO remains ON, pressing Continue resumes auto-play.
 
+### Game-over log
+
+When the game is over, the final board is appended to `Documents/LCAC-2048_over.log`
+inside the app's container. One block per game, with the **dylib version, time, score and board**.
+
+```
+2026-11-04 21:15:03 +0900 v3.6 score=146544
+  4096   8192   1024    256
+    32     64      8      4
+   256    512    256     64
+     4   1024   8192   4096
+```
+
+- Values are the real ones; a tile the screen draws as 2 is recorded as 4 once rewritten.
+- If the score cannot be read the line shows `score=-1`; the board is still written.
+- The file is appended to, so previous games stay in it.
+
 ### When it does not work
 
 A missing button, a stuck `I_CLASS` / `F_EXC`, a halt at an ad, and similar symptoms are covered in
