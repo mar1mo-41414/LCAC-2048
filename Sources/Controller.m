@@ -12,6 +12,7 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
 @interface Auto2048Controller : NSObject
 @property(nonatomic, strong) CADisplayLink *link;
 @property(nonatomic, strong) UIButton *button;
+@property(nonatomic, strong) UIButton *retryButton;
 @property(nonatomic, weak) UIWindow *attached;
 @property(nonatomic) BOOL enabled;
 @property(nonatomic) NSInteger speed;
@@ -19,6 +20,9 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
 @property(nonatomic, strong) NSString *status;
 @property(nonatomic) BOOL pending;
 @property(nonatomic) NSUInteger epoch;
+// Start over as soon as a game is over. Off on launch, never persisted.
+@property(nonatomic) BOOL retry;
+@property(nonatomic) CFTimeInterval lastRetry;
 @end
 
 @implementation Auto2048Controller
@@ -55,6 +59,52 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
                  forState:UIControlStateNormal];
     self.button.backgroundColor = self.enabled ? [UIColor colorWithRed:0.12 green:0.50 blue:0.32 alpha:0.88]
                                                : [UIColor colorWithWhite:0.12 alpha:0.85];
+    [self.retryButton setTitle:[NSString stringWithFormat:@"RETRY\n%@", self.retry ? @"ON" : @"OFF"]
+                      forState:UIControlStateNormal];
+    self.retryButton.backgroundColor = self.retry ? [UIColor colorWithRed:0.78 green:0.42 blue:0.12 alpha:0.90]
+                                                  : [UIColor colorWithWhite:0.12 alpha:0.85];
+}
+
+- (UIButton *)makeButton:(SEL)action {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:10];
+    b.titleLabel.numberOfLines = 2;
+    b.titleLabel.textAlignment = NSTextAlignmentCenter;
+    b.layer.cornerRadius = 12;
+    b.layer.borderWidth = 1;
+    b.layer.borderColor = UIColor.whiteColor.CGColor;
+    b.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin;
+    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+// Turning the retry on also starts the auto-play: a game over can only be
+// noticed while the AI is playing.
+- (void)tapRetry {
+    self.retry = !self.retry;
+    if (self.retry && !self.enabled) {
+        self.enabled = YES;
+        self.status = @"START";
+        self.epoch++;
+        self.last = CACurrentMediaTime();
+    }
+    [self refresh];
+}
+
+// Called when the game stopped (PAUSE) or the search found no move (END).
+- (void)retryNow {
+    if (!self.retry || self.pending) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - self.lastRetry < 2.0) return;
+    self.lastRetry = now;
+    if (!Auto2048GameOver()) return;
+    if (![Auto2048Restart() isEqualToString:@"ON"]) return;
+    self.pending = NO;
+    self.enabled = YES;
+    self.status = @"RETRY";
+    self.epoch++;
+    self.last = CACurrentMediaTime();
+    [self refresh];
 }
 
 // Losing focus invalidates any search that is still running.
@@ -97,29 +147,25 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
     if (!w) return;
 
     if (!self.button) {
-        UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-        b.titleLabel.font = [UIFont boldSystemFontOfSize:10];
-        b.titleLabel.numberOfLines = 2;
-        b.titleLabel.textAlignment = NSTextAlignmentCenter;
-        b.layer.cornerRadius = 12;
-        b.layer.borderWidth = 1;
-        b.layer.borderColor = UIColor.whiteColor.CGColor;
-        b.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin;
-        [b addTarget:self action:@selector(tap) forControlEvents:UIControlEventTouchUpInside];
+        self.button = [self makeButton:@selector(tap)];
         UILongPressGestureRecognizer *g = [[UILongPressGestureRecognizer alloc] initWithTarget:self
                                                                                        action:@selector(hold:)];
         g.minimumPressDuration = 0.55;
         g.cancelsTouchesInView = YES;
-        [b addGestureRecognizer:g];
-        self.button = b;
+        [self.button addGestureRecognizer:g];
+        self.retryButton = [self makeButton:@selector(tapRetry)];
         [self refresh];
     }
 
     if (self.attached != w) {
         [self.button removeFromSuperview];
+        [self.retryButton removeFromSuperview];
         [w addSubview:self.button];
+        [w addSubview:self.retryButton];
         self.attached = w;
-        self.button.frame = CGRectMake(MAX(4, w.bounds.size.width - 92), MAX(4, w.bounds.size.height - 126), 80, 56);
+        CGFloat x = MAX(4, w.bounds.size.width - 92);
+        self.button.frame = CGRectMake(x, MAX(4, w.bounds.size.height - 126), 80, 56);
+        self.retryButton.frame = CGRectMake(x, MAX(4, w.bounds.size.height - 190), 80, 56);
     }
 }
 
@@ -127,6 +173,10 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
     if (![status isEqualToString:self.status]) {
         self.status = status;
         [self refresh];
+    }
+    if ([status isEqualToString:@"END"] && self.retry) {
+        [self retryNow];
+        return;
     }
     if ([status isEqualToString:@"END"] || [status isEqualToString:@"ERR"] || [status isEqualToString:@"DATA"] ||
         [status isEqualToString:@"SIZE"]) {
@@ -146,6 +196,7 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
     NSString *status = Auto2048Read(&snapshot);
     if (![status isEqualToString:@"OK"]) {
         [self setDisplayStatus:status];
+        if ([status isEqualToString:@"PAUSE"]) [self retryNow];
         return;
     }
 

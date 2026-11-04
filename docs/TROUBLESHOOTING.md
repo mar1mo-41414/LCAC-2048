@@ -79,8 +79,10 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `no four-chance field and no grid setter; spawns stay 2/4` — この版ではどちらの手も使えず、
   従来通り 2 / 4 で動きます。
 - `grid write failed; spawns stay 2/4` — 書き込みを読み直せなかったため、自動で 2 / 4 に戻しました。
-- `the game ignores rewritten cells; spawns stay 2/4` — 書き換えた盤面とゲームの手が 8 回続けて
-  食い違ったため、自動で 2 / 4 に戻しました (ゲームは壊れません)。
+- `the game ignores rewritten cells; spawns stay 2/4` — **v3.7 で廃止しました**。
+  手で操作したときや、ゲームをやり直したときも「食い違い」に見えてしまうため、
+  書き換えを止める判断には使わないことにしました。書き換えが効かない場合は
+  画面の 2 と 2 が 4 に合体するので、そこで気づけます。
 - `a 2 spawned after forcing; reverting to 2/4` — 確率フィールドの推測が外れたため戻しました。
 
 ### 調査ログ（既定ではオフ）
@@ -97,6 +99,38 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `view redraw found` / `view redraw called` — 画面の描き直しを呼べたかどうか
 
 既定で出るのは、上の「出現タイルが 4 に固定されない」に挙げた状態の行だけです。
+
+### 再挑戦 (RETRY) が効かない
+
+`RETRY` が ON なのに、ゲームオーバーの画面で止まる場合:
+
+- `restart method not found` → 再開らしい処理が見つかっていません。
+- `restart candidate ...` → 再開に使えそうな処理の一覧 (名前・引数の数・戻り値の型を数値で)。
+- `restart attempt 2 of 3` → 2 秒ごとに候補を順番に試しています。候補の数も出ます。
+- `restart: coroutine started` → その処理はコルーチンで、起動まで行きました。
+- `restart took effect: 2 tiles` → 盤面 (ゲームの計算) は新しいゲームに戻りました。
+- `field <数値> / <数値>` → 画面側 (`GridViewManager`) が持っている部品の一覧。
+- `object <数値>` → その部品の GameObject の名前。
+- `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
+  これが出ても画面が残る場合は、閉じる対象が別の部品です。
+- `lose screen <名前>` → 閉じたゲームオーバー画面 (`ClassicRegularGameLoseScreen`)。
+- `lose screen hidden (1 of 71 objects)` → 閉じた数。`0` なら見つかっていません。
+- `frame 12345 after hide` / `frame 12345 sweep` → ゲームのフレーム番号。
+  再挑戦の後にこの数字が進んでいなければ、画面が描き直されていません。
+- 再挑戦のあと約 20 秒は走査を続けます。ゲームが後から画面を出し直した場合も閉じます
+  (閉じたときだけ `lose screen hidden` が出ます)。
+- `hud shown` → ゲームオーバー画面を閉じたあと、スコア・メニュー (`ClassicRegularGameHud`)
+  を表示に戻した合図。ゲームはゲームオーバー時に HUD を自分で消すため、こちらで戻します。
+  この行が 2 回出ると、通常版とチャレンジ版の HUD を両方出してしまい表示が重なります
+  (v3.19 でモードに合うほうだけを出すよう修正)。
+- `scene object deactivated` → その部品を非表示にしました。
+
+### 盤面は戻るのにゲームオーバー画面が消えない
+盤面 (ゲームの計算) と画面は別々に動いています。`RestartCurrentGameMode` は盤面だけを
+作り直すため、画面のパネルは自分では消えません。v3.9 では画面の部品を調べて、
+閉じる処理 (`Hide` / `Close` など) か `SetActive(false)` でパネルを閉じにいきます。
+- 何も出ない → ゲームオーバーの判定ができていません ([ゲームオーバーのログ](#ゲームオーバーのログ) の
+  確認手順を見てください)。
 
 ### ゲームオーバーのログ
 

@@ -7,6 +7,147 @@
 > v3.5 のビルドは、ログの先頭に `tweak v3.10: 2->4 rewrite (debug log off)` と出ます
 > (試作番号のままなので、版表示だけタグと一致していません)。
 
+## 2026-11-04 v3.7: ゲームオーバー後に自動で再挑戦 (RETRY ボタン)
+
+- `AUTO` の上に `RETRY` ボタンを追加。**既定は OFF**、タップで ON / OFF、オフにするまで繰り返す。
+- ON のあいだは、ゲームオーバーを検出するたびにゲーム側の再開処理を呼んで
+  「もう一度始める」を代行する。呼び出しは 2 秒間隔。
+- ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
+- ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
+
+### 実機の v3.18 ビルド: HUD は戻ったが二重になった
+- `hud shown` が 2 回出て、スコアやメニューが重なって表示された。
+- `MenuManager` の下には HUD が 2 つあるため。
+
+  ```
+  MenuManager > ClassicRegularGameHud   (通常ゲーム用)
+              > ClassicChallengeHud     (チャレンジ用)
+              > ClassicRegularGameLoseScreen
+              > ClassicChallengeLoseScreen
+  ```
+
+- v3.19 では、閉じた LoseScreen の名前を見て**同じモードの HUD だけ**を表示に戻す
+  (`…LoseScreen` が `Challenge` を含むなら `Challenge` の HUD)。
+
+### 実機の v3.17 ビルド: HUD はゲームが消していた
+- `lose screen hidden (0 of 69 objects)` → 1.5 秒後に `(1 of 73 objects)`。
+  ゲームオーバー画面は再挑戦の 1.5 秒後に出てくるので、最初の走査ではまだ無い。
+- 閉じるとゲームは続くが、**HUD (スコア・メニュー) は消えたまま**だった。
+  ゲームオーバーのときにゲーム自身が HUD を消していて、再挑戦では戻らないため。
+- v3.18 では LoseScreen を閉じるとき、その親 (`MenuManager`) の子から
+  `ClassicRegularGameHud` とその中の `Body` を探して表示に戻す (`hud shown`)。
+
+### 実機の v3.16 ビルド: 画面の本当の名前が分かった
+- 表示中のオブジェクトだけでは見つからなかったが、**非表示も含めて**探したところ
+  ゲームオーバー画面の名前が出てきた。
+
+  ```
+  MenuManager
+    ClassicRegularGameHud      … スコア・メニュー・ランキング (HUD)
+    ClassicRegularGameLoseScreen   … ← これがゲームオーバー画面
+    ClassicChallengeLoseScreen     … チャレンジ用
+  ```
+
+- つまり `Body` (HUD) を閉じていたのは完全に的外れで、HUD まで消えていた原因。
+- v3.17 では `LoseScreen` だけを閉じる。HUD には触らないので、スコアもメニューも残る。
+- 名前の判定に使う文字列を 24 → 63 文字に広げた (`ClassicRegularGameLoseScreen` は
+  24 文字では途中で切れて `losescreen` に一致しない)。
+
+### 実機の v3.15 ビルド: パネルは消えた (ただし HUD も消えた)
+- 再挑戦の 1.3 秒後にゲームがパネルを出し直してくるので、その時点でもう一度閉じると
+  **ゲームオーバー画面は消え、盤面のプレイが続いた**。原因の読みは当たっていた。
+- ただし `Body` はスコア・メニュー・ランキングも含む入れ物なので、閉じると
+  **スコア表示まで消える** (数十秒後にゲームが戻す)。
+- v3.16 ではパネルを閉じるのを数秒で切り上げ、そのあと `Body` を戻して HUD を復帰させる。
+
+### 実機の v3.14 ビルド: 画面の構成とフレーム
+- フレーム番号は 53827 → 53850 と進んでいた (描画は止まっていない)。
+- Canvas は 4 つ。
+
+  | Canvas | 中身 |
+  | --- | --- |
+  | `Gameboard ipadVariant(Clone)` | 盤面 (Gameboard_Bg / GameTiles_Container / InputZone) |
+  | `ClassicRegularGameHud` | `Body` (非表示) > `LayoutParent` > Logo, ScoreContainer, BestScoreContainer |
+  | `LoadingScreen` | WhiteBackground, Spinner |
+  | `UI` | Background, LoadingScreen, FPSCanvas, Gameboard … |
+
+- ゲームオーバー専用の Canvas や部品は無い。`Body` を閉じても画面が残るのは、
+  **ゲームが自分のゲームオーバー演出のあとで `Body` を出し直している**ためと考えられる
+  (閉じた直後の 0.4 秒では `Body` は非表示のままだった)。
+- v3.15 では再挑戦のあと約 10 秒間、走査を続けて出し直されても閉じる。
+  出し直しが続く場合は毎回閉じるので、見た目は消えたままになる。
+
+### 実機の v3.13 ビルド: Body を閉じても画面は残った
+- `overlay hidden (1 of 68 objects)` のあと、次の走査では `(0 of 53 objects)`。
+  **Body は確かに閉じている** (子 15 個が非表示になり 68 → 53) のに、画面のパネルは残った。
+- つまり「Game Over! / スコア / 共有する / もう一度始める / いいね!」の画面は Body ではない。
+- v3.14 では Canvas を列挙して各画面の中身 (非表示の子も含む) を出し、
+  ゲームのフレーム番号も記録して、描き直しが止まっていないかを確かめる。
+
+### 実機の v3.12 ビルド: 階層でゲームオーバー画面を特定
+- 親の名前をとったことで、画面の構成が分かった。
+
+  ```
+  UI > Gameboard ipadVariant(Clone) > RatioFitter > Gameboard_Bg, GameTiles_Container, InputZone
+  MenuManager > ClassicRegularGameHud > Body > LayoutParent > Logo, ScoreContainer,
+                                                            BestScoreContainer, HudHelpText
+  Managers > Grid View, CoreManagers, ...
+  ```
+
+- ゲームオーバー画面は `ClassicRegularGameHud` の下の **`Body`**。ロゴ・スコア・
+  「メニュー」「ランキング」ボタンをまとめた入れ物で、プレイ中は非表示になっている。
+- v3.13 では再挑戦のあとにこの `Body` を `SetActive(false)` で閉じる。
+  1 フレーム後に出し直される場合に備えて、次の 2 回の読み取りでもう一度確認する。
+
+### 実機の v3.11 ビルド: 68 個の名前を全部とった
+- 内訳はタイル (GameTile / Gametile_Bg / Num_Txt)、盤面 (Gameboard_Bg / GameTiles_Container)、
+  スコア表示 (ScoreText / BestScoreContainer)、メニュー (MenuButton / LeaderboardsButton / Logo)、
+  それに `ClassicRegularGameHud` などの管理役。**ゲームオーバー専用の名前は無い**。
+- 画面は名前ではなく**階層**で見ないと分からないため、v3.12 では各部品の親の名前も出す。
+- あわせて `ClassicRegularGameHud` / `Gameboard` / `MenuManager` などのクラスを探し、
+  `lose` / `over` / `hide` 系の処理を一覧し、そのうち `lose` / `over` のものを実際に呼ぶ。
+
+### 実機の v3.10 ビルド: 名前で当てるのは無理だった
+- シーンの GameObject は 69 個。`over` / `lose` / `popup` / `dialog` / `panel` / `canvas` などを
+  含む名前は **`LoadingScreen` だけ**だった。ゲームオーバー画面は名前で判別できない。
+- 名前が日本語の可能性があるため、記録を UTF-8 にして v3.11 で全 69 個の名前を出すことにした。
+
+### 実機の v3.9 ビルド: 画面側の部品一覧をとった
+- `GridViewManager` のフィールドは描画用のものだけだった (盤面タイルのプレハブ、`_grid`、
+  `_gameboardInstance` = `Gameboard` など)。ゲームオーバーのパネルは持っていない。
+- `get_name` を `GameObject` から引いていたため名前が取れていなかった
+  (実際は親クラスの `UnityEngine.Object` にある)。v3.10 で修正。
+- v3.10 では**シーン上の GameObject を列挙して名前を見る**方式にした。
+  `over` / `lose` / `popup` / `dialog` を含む名前のものは非表示にする。
+
+### 実機の v3.8 ビルド: 盤面は戻るがゲームオーバー画面が消えない
+- `restart candidate` の記録から、効いたのは `RestartCurrentGameMode` (戻り値 `System.Void`) と判明。
+  呼ぶと盤面は 2 タイルの新しいゲームに戻る (`restart took effect: 2 tiles`)。
+- ただし画面は「ゲームオーバー！」のパネルのまま。**盤面 (モデル) と画面は別**で、
+  この処理はモデルしか作り直さない。
+- v3.9 では画面側 (`GridViewManager`) の部品を列挙し、それらしいパネルを
+  `Hide` / `Close` / `SetActive(false)` で閉じにいく。閉じたかどうかは
+  `panel deactivated` / `object deactivated` で分かる。
+
+### 実機の v3.7 ビルドのログ: 再開の処理は呼べたがゲームは始まらない
+- `restart entry` で `RestartCurrentGa…` を掴めていたが、ゲームオーバー画面のままだった。
+- 名前は 16 文字までしか出せず末尾が不明なので、記録を 24 文字に増やし、
+  **候補 (restart / playagain / newgame / newround / startover) を全部ログに出して
+  2 秒ごとに順番に試す**ようにした。あわせて戻り値の型も記録する。
+- 戻り値が `IEnumerator` の場合はコルーチンなので、`StartCoroutine` に渡すようにした
+  (呼ぶだけでは何も起きない)。
+- 再開が効けば、次の読み取りで `restart took effect: N tiles` が出る。
+
+### 実機の v3.6 ビルドのログで分かった 2 点
+- `restart method not found` — メソッド名を決め打ちで探していたのが外れた。名前はログで
+  16 文字までしか見えないため、`restart` / `playagain` / `newgame` などの**キーワードで探し**、
+  引数なしのものを選ぶようにした (`GameManager` とゲームオブジェクトの両方を見る)。
+  見つけた名前は数値でログに出す。
+- `the game ignores rewritten cells; spawns stay 2/4` — 4 固定が 13 秒で切れていた。
+  予想と盤面の食い違いは、**手で操作したときやゲームをやり直したときにも起きる**ので、
+  書き換えを止める判断材料には使えない。この自動停止を撤廃した
+  (止めるのは「書いた値を読み直せない」ときだけ)。
+
 ## 2026-11-04 v3.6: ゲームオーバー時の盤面をファイルに残す
 
 - ゲームオーバーになったら、アプリの `Documents/LCAC-2048_over.log` に

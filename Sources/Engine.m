@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.6"
-#define TWEAK_VERSION_OBJC @"v3.6"
+#define TWEAK_VERSION "v3.19"
+#define TWEAK_VERSION_OBJC @"v3.19"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -42,6 +42,13 @@ static const char *(*type_get_name)(const void *);
 static void (*field_set)(void *, F *, void *);
 static uint32_t (*field_flags)(const F *);
 static C *(*class_element)(C *);
+static C *(*class_parent)(C *);
+static const char *(*class_name)(C *);
+static const void *(*method_ret)(const M *);
+static uint16_t *(*string_chars)(void *);
+static uint32_t (*array_len)(void *);
+
+static const void *(*method_param)(const M *, uint32_t);
 
 static C *gmClass, *regularClass, *gridClass, *viewClass;
 static void *gmType;
@@ -113,13 +120,21 @@ static BOOL initEngine(void) {
     LOAD(unbox, "il2cpp_object_unbox");
     LOAD(corlib, "il2cpp_get_corlib");
 
-    *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
+    *(void **)(&string_chars) = dlsym(RTLD_DEFAULT, "il2cpp_string_chars");
+    *(void **)(&array_len) = dlsym(RTLD_DEFAULT, "il2cpp_array_length");
     *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
     *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
     *(void **)(&type_get_name) = dlsym(RTLD_DEFAULT, "il2cpp_type_get_name");
     *(void **)(&field_set) = dlsym(RTLD_DEFAULT, "il2cpp_field_set_value");
     *(void **)(&field_flags) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_flags");
     *(void **)(&class_element) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_element_class");
+    *(void **)(&class_parent) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_parent");
+    *(void **)(&class_name) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_name");
+    *(void **)(&method_ret) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_return_type");
+    *(void **)(&class_fields) = dlsym(RTLD_DEFAULT, "il2cpp_class_get_fields");
+    *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
+    *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
+    *(void **)(&method_param) = dlsym(RTLD_DEFAULT, "il2cpp_method_get_param");
 
     if (!corlib() || !domain_get()) {
         initStatus = @"I_UNITY";
@@ -204,7 +219,6 @@ static BOOL haveExpected;
 // work (write, read back, compare), and switched off if 2s come back.
 static const M *setCellMethod;
 static int converting;
-static int conversionMismatch;
 // The board on screen is drawn by the view from the tile objects, so a grid
 // write alone only changes the game's logic, not the picture. If the view has
 // a no-argument redraw entry point, call it after rewriting.
@@ -252,6 +266,72 @@ static int diagLeft = 40;
 
 // Method and class names as two 7-bit packed numbers: os_log masks strings
 // ("<private>") but never numbers.
+// Same idea as encName, but keeps 24 characters. Used when a name has to be
+// identified exactly (the restart entry point is longer than 16 characters).
+static void encName3(const char *s, unsigned long long out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    for (int i = 0; s && s[i] && i < 24; i++)
+        out[i / 8] |= ((unsigned long long)(unsigned char)s[i]) << (7 * (i % 8));
+}
+
+// A managed string (UTF-16) packed the same way; used for GameObject names.
+// Unity object names are ASCII, so the low 7 bits are enough.
+static void encManagedName(void *str, unsigned long long out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    if (!str || !string_chars) return;
+    const uint16_t *ch = string_chars(str);
+    if (!ch) return;
+    // UTF-8 bytes, so Japanese names survive the 7-bit packing as well.
+    int n = 0;
+    for (int i = 0; ch[i] && n < 24; i++) {
+        unsigned int c = ch[i];
+        unsigned char b[3];
+        int k;
+        if (c < 0x80) {
+            b[0] = (unsigned char)c;
+            k = 1;
+        } else if (c < 0x800) {
+            b[0] = (unsigned char)(0xc0 | (c >> 6));
+            b[1] = (unsigned char)(0x80 | (c & 0x3f));
+            k = 2;
+        } else {
+            b[0] = (unsigned char)(0xe0 | (c >> 12));
+            b[1] = (unsigned char)(0x80 | ((c >> 6) & 0x3f));
+            b[2] = (unsigned char)(0x80 | (c & 0x3f));
+            k = 3;
+        }
+        for (int j = 0; j < k && n < 24; j++, n++)
+            out[n / 8] |= ((unsigned long long)b[j]) << (7 * (n % 8));
+    }
+}
+
+// Plain ASCII copy of a managed string (keywords only; names are ASCII).
+// Long enough for names like "ClassicRegularGameLoseScreen": a keyword can sit
+// far past the 24 characters that are logged.
+static void managedName(void *str, char out[64]) {
+    out[0] = 0;
+    if (!str || !string_chars) return;
+    const uint16_t *ch = string_chars(str);
+    if (!ch) return;
+    int i = 0;
+    for (; i < 63 && ch[i]; i++) out[i] = (char)(ch[i] & 0x7f);
+    out[i] = 0;
+}
+
+// A managed array: header (object 16, bounds 8, length 8) then the elements.
+// il2cpp_array_length is not exported everywhere, so the layout is the fallback.
+static int managedCount(void *arr) {
+    if (!arr) return 0;
+    if (array_len) return (int)array_len(arr);
+    uintptr_t n = *(uintptr_t *)((char *)arr + 24);
+    return n > 5000 ? 0 : (int)n;
+}
+
+static void *managedItem(void *arr, int i) {
+    if (!arr || i < 0) return NULL;
+    return *(void **)((char *)arr + 32 + (size_t)i * sizeof(void *));
+}
+
 static void encName(const char *s, unsigned long long out[2]) {
     out[0] = out[1] = 0;
     for (int i = 0; s && s[i] && i < 16; i++)
@@ -402,6 +482,236 @@ static long long readScore(void *mgr, void *game) {
         if (!failedInvocation) return v;
     }
     return -1;
+}
+
+// The "play again" button in the game calls a single method. Looked up by name
+// because the app hides managed names from logs, not from the runtime.
+static const M *restartList[8];
+static int restartListOnGame[8];
+static int restartCount;
+static int restartIndex;
+static int restartLooked;
+// Set when a restart was asked for; the next readable board reports whether it
+// actually took effect.
+static int restartPending;
+
+// The game over screen is not part of the model, so restarting the model leaves
+// it on screen. The scene tree says which object it is:
+//
+//   MenuManager > ClassicRegularGameHud > Body > LayoutParent > Logo,
+//                                                              ScoreContainer,
+//                                                              BestScoreContainer, ...
+//
+// "Body" is the overlay that carries the logo, the score and the buttons. It is
+// off while a game is running, so it has to be switched off again after the
+// model has been restarted for the player.
+static int overlayHidesLeft;
+static C *objClassRef;
+
+// Object.FindObjectsOfType(Type): every object of a class that is in the scene.
+static void *findAllOf(C *k) {
+    if (!k || !objClassRef || !class_type || !type_object) return NULL;
+    const M *findAll = NULL;
+    void *it = NULL;
+    const M *candidate;
+    while ((candidate = class_methods(objClassRef, &it))) {
+        const char *n = method_name(candidate);
+        if (!n || strcmp(n, "FindObjectsOfType") || param_count(candidate) != 1 || method_generic(candidate))
+            continue;
+        findAll = candidate;
+        break;
+    }
+    if (!findAll) return NULL;
+    void *typeObj = type_object(class_type(k));
+    if (!typeObj) return NULL;
+    void *par[] = {typeObj};
+    void *arr = call(findAll, NULL, par);
+    return failedInvocation ? NULL : arr;
+}
+
+// Whether the game loop is running at all. A frozen counter means the screen is
+// not being redrawn, so hiding an object would look like it did nothing.
+static void logFrame(const char *tag) {
+    C *t = findClass("UnityEngine", "Time");
+    const M *fc = t ? method(t, "get_frameCount", 0) : NULL;
+    if (!fc) return;
+    void *box = call(fc, NULL, NULL);
+    if (failedInvocation || !box) return;
+    NSLog(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
+}
+
+// The game over screen has a name of its own after all:
+//
+//   MenuManager > ClassicRegularGameLoseScreen   (regular games)
+//                 ClassicChallengeLoseScreen     (daily challenge)
+//
+// Only those are switched off. The HUD (score, menu, leaderboard) lives in a
+// different object and must stay visible.
+// The HUD switches itself off when the game ends, and the game only switches it
+// back on when it starts a game by itself. It is a sibling of the lose screen:
+//
+//   MenuManager > ClassicRegularGameHud > Body     (score, menu, leaderboard)
+//               > ClassicRegularGameLoseScreen
+//
+// Walking the parent's children works even while they are switched off.
+static void showHudBeside(void *loseScreen, const char *loseName) {
+    C *goClass = findClass("UnityEngine", "GameObject");
+    C *compClass = findClass("UnityEngine", "Component");
+    C *trClass = findClass("UnityEngine", "Transform");
+    if (!goClass || !compClass || !trClass || !string_chars) return;
+    const M *goTransform = method(goClass, "get_transform", 0);
+    const M *setActive = method(goClass, "SetActive", 1);
+    const M *getParent = method(trClass, "get_parent", 0);
+    const M *getChildCount = method(trClass, "get_childCount", 0);
+    const M *getChild = method(trClass, "GetChild", 1);
+    const M *getGameObject = method(compClass, "get_gameObject", 0);
+    const M *nameOf = method(objClassRef, "get_name", 0);
+    if (!goTransform || !setActive || !getParent || !getChildCount || !getChild || !getGameObject || !nameOf)
+        return;
+    void *tr = call(goTransform, loseScreen, NULL);
+    void *up = tr ? call(getParent, tr, NULL) : NULL;
+    if (!up || failedInvocation) return;
+    void *cnt = call(getChildCount, up, NULL);
+    if (failedInvocation || !cnt) return;
+    int n = *(int32_t *)unbox(cnt);
+    for (int i = 0; i < n; i++) {
+        int32_t idx = i;
+        void *par[] = {&idx};
+        void *child = call(getChild, up, par);
+        if (failedInvocation || !child) continue;
+        void *go = call(getGameObject, child, NULL);
+        void *nm = go ? call(nameOf, go, NULL) : NULL;
+        if (!nm || failedInvocation) continue;
+        char plain[64];
+        managedName(nm, plain);
+        // MenuManager owns one HUD per mode. Showing both draws the score and
+        // the menu twice, so only the one that belongs to this game is used.
+        BOOL challenge = (BOOL)containsWord(loseName, "challenge");
+        if (!containsWord(plain, "hud")) continue;
+        if (challenge ? !containsWord(plain, "challenge") : !containsWord(plain, "regular")) continue;
+        uint8_t on = 1;
+        void *p[] = {&on};
+        call(setActive, go, p);
+        // ...and the body inside it, which is the part that disappears.
+        void *cc = call(getChildCount, child, NULL);
+        if (failedInvocation || !cc) continue;
+        int m = *(int32_t *)unbox(cc);
+        for (int j = 0; j < m; j++) {
+            int32_t k = j;
+            void *par2[] = {&k};
+            void *sub = call(getChild, child, par2);
+            if (failedInvocation || !sub) continue;
+            void *sgo = call(getGameObject, sub, NULL);
+            void *snm = sgo ? call(nameOf, sgo, NULL) : NULL;
+            if (!snm || failedInvocation) continue;
+            char sp[64];
+            managedName(snm, sp);
+            if (strcmp(sp, "Body")) continue;
+            void *p2[] = {&on};
+            call(setActive, sgo, p2);
+        }
+        NSLog(@"[2048-auto] hud shown");
+    }
+}
+
+static void hideLoseScreen(BOOL verbose) {
+    C *goClass = findClass("UnityEngine", "GameObject");
+    C *objClass = objClassRef = findClass("UnityEngine", "Object");
+    if (!goClass || !objClass) return;
+    const M *nameOf = method(objClass, "get_name", 0);
+    const M *setActive = method(goClass, "SetActive", 1);
+    if (!nameOf || !setActive) return;
+    void *arr = findAllOf(goClass);
+    if (!arr) return;
+    int total = managedCount(arr);
+    int hidden = 0;
+    for (int i = 0; i < total && i < 400; i++) {
+        void *go = managedItem(arr, i);
+        if (!go) continue;
+        void *nm = call(nameOf, go, NULL);
+        if (failedInvocation || !nm) continue;
+        char plain[64];
+        managedName(nm, plain);
+        if (!containsWord(plain, "losescreen") && !containsWord(plain, "gameover")) continue;
+        if (verbose) {
+            unsigned long long c[3] = {0, 0, 0};
+            encManagedName(nm, c);
+            NSLog(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
+        }
+        uint8_t off = 0;
+        void *p[] = {&off};
+        call(setActive, go, p);
+        hidden++;
+        showHudBeside(go, plain);
+    }
+    if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
+}
+
+// A "play again" handler is quite often a coroutine: invoking it only builds an
+// IEnumerator, and nothing happens until it is handed to StartCoroutine.
+static const M *startCoroutine;
+static int startCoroutineLooked;
+
+static const M *findStartCoroutine(void) {
+    if (startCoroutineLooked) return startCoroutine;
+    startCoroutineLooked = 1;
+    C *k = gmClass;
+    for (int depth = 0; k && method_param && class_parent && class_name && depth < 12; depth++) {
+        const char *n = class_name(k);
+        if (n && !strcmp(n, "MonoBehaviour")) {
+            void *it = NULL;
+            const M *m;
+            while ((m = class_methods(k, &it))) {
+                const char *mn = method_name(m);
+                if (!mn || strcmp(mn, "StartCoroutine") || param_count(m) != 1) continue;
+                const void *pt = method_param(m, 0);
+                const char *tn = pt ? type_get_name(pt) : NULL;
+                if (tn && strstr(tn, "IEnumerator")) {
+                    startCoroutine = m;
+                    break;
+                }
+            }
+        }
+        k = class_parent(k);
+    }
+    return startCoroutine;
+}
+
+// The exact name is not known: the app hides method names from logs, and the
+// truncated dump only shows the first 16 characters. Match by keyword instead,
+// preferring methods that take no arguments.
+static void findRestart(void *game) {
+    if (restartLooked) return;
+    restartLooked = 1;
+    static const char *keys[] = {"restart", "playagain", "newgame", "newround", "startover"};
+    C *classes[2];
+    classes[0] = gmClass;
+    classes[1] = game ? object_class(game) : NULL;
+    for (int c = 0; c < 2 && restartCount < 8; c++) {
+        C *k = classes[c];
+        if (!k) continue;
+        void *it = NULL;
+        const M *m;
+        while ((m = class_methods(k, &it))) {
+            const char *n = method_name(m);
+            if (!n || param_count(m) != 0) continue;
+            for (int i = 0; i < 5; i++) {
+                if (!containsWord(n, keys[i])) continue;
+                unsigned long long e[3], r[3] = {0, 0, 0};
+                encName3(n, e);
+                const void *rt = method_ret ? method_ret(m) : NULL;
+                if (rt && type_get_name) encName3(type_get_name(rt), r);
+                NSLog(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
+                      e[0], e[1], e[2], r[0], r[1], r[2]);
+                if (restartCount < 8) {
+                    restartList[restartCount] = m;
+                    restartListOnGame[restartCount] = c;
+                    restartCount++;
+                }
+                break;
+            }
+        }
+    }
 }
 
 static void saveGameOver(const int32_t *b, long long score) {
@@ -624,6 +934,27 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         }
     }
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    // The game may put the panel back a frame later, so sweep a couple of times.
+    if (overlayHidesLeft > 0) {
+        overlayHidesLeft--;
+        hideLoseScreen(NO);
+        if (overlayHidesLeft == 58) logFrame("sweep");
+    }
+    if (restartPending) {
+        restartPending = 0;
+        int tiles = 0;
+        for (int i = 0; i < 16; i++)
+            if (board[i]) tiles++;
+        NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        void *view = call(viewInstance, NULL, NULL);
+        if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
+        hideLoseScreen(YES);
+        logFrame("after hide");
+        // The game shows the screen again once its own game over animation has
+        // finished, so keep watching for a while. Only the lose screen is
+        // touched, so this costs nothing on screen.
+        overlayHidesLeft = 60;
+    }
     noteGameOver(board, mgr, game);
     if (diagLeft > 0) {
         diagLeft--;
@@ -643,18 +974,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             } else if (out->board[i] != expected[i])
                 added = 99;
         if (converting && diagLeft > 0) logBoard(2, expected);
-        // Our prediction is based on the rewritten board. If the game keeps
-        // disagreeing with it, the rewrite is not reaching the game's own
-        // state, so stop instead of fighting it.
-        if (converting) {
-            if (added == 1)
-                conversionMismatch = 0;
-            else if (added >= 2 && ++conversionMismatch >= 8) {
-                converting = 0;
-                solver_set_spawn_value(0);
-                NSLog(@"[2048-auto] the game ignores rewritten cells; spawns stay 2/4");
-            }
-        }
+        // A mismatch between the prediction and the board is no longer treated
+        // as "the game ignores the rewrite": playing by hand or restarting a
+        // game between our move and the read looks exactly the same. The
+        // rewrite is switched off only when a write cannot be read back.
         if (added == 1 && at >= 0 && fourOwner) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
@@ -667,6 +990,55 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     out->game = (uintptr_t)game;
     out->grid = (uintptr_t)grid;
     return @"OK";
+}
+
+BOOL Auto2048GameOver(void) { return gameOverLogged ? YES : NO; }
+
+// Starts a new game after a dead end. Returns "ON" when the game was asked to
+// restart, "NO" when there was nothing to do. The caller re-reads the board on
+// the next tick, so a restart that silently fails simply comes back as another
+// game over and is retried.
+NSString *Auto2048Restart(void) {
+    if (!initEngine()) return initStatus;
+    if (!gameOverLogged) return @"NO";
+    failedInvocation = NO;
+    void *args[] = {gmType};
+    void *mgr = call(findObj, NULL, args);
+    if (failedInvocation || !mgr) return @"NO";
+    void *game = NULL;
+    field_value(mgr, currentField, &game);
+    if (failedInvocation) return @"NO";
+    findRestart(game);
+    if (!restartCount) {
+        NSLog(@"[2048-auto] restart method not found");
+        return @"NO";
+    }
+    int slot = restartIndex++ % restartCount;
+    const M *m = restartList[slot];
+    if (!m) return @"NO";
+    void *ret = call(m, restartListOnGame[slot] ? game : mgr, NULL);
+    if (failedInvocation) return @"NO";
+    // A coroutine has to be started; invoking it alone does nothing.
+    if (ret && method_ret && type_get_name) {
+        const void *rt = method_ret(m);
+        const char *tn = rt ? type_get_name(rt) : NULL;
+        if (tn && strstr(tn, "IEnumerator")) {
+            const M *sc = findStartCoroutine();
+            if (sc) {
+                void *par[] = {ret};
+                call(sc, mgr, par);
+                NSLog(@"[2048-auto] restart: coroutine started");
+            } else {
+                NSLog(@"[2048-auto] restart: coroutine not startable");
+            }
+        }
+    }
+    restartPending = 1;
+    // The next game over is a different game, so allow it to be written out.
+    gameOverLogged = 0;
+    haveExpected = NO;
+    NSLog(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
+    return @"ON";
 }
 
 NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {
