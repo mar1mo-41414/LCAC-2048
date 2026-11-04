@@ -477,13 +477,14 @@ static int restartPending;
 // guessing which class owns it, walk the objects in the scene and look at their
 // names. Names are English even when the labels on screen are not.
 static void scanObjects(const M *nameOf, const M *setActive) {
-    if (!nameOf || !setActive || !obj || !class_type || !type_object) return;
+    if (!nameOf || !setActive || !class_type || !type_object) return;
     C *goClass = findClass("UnityEngine", "GameObject");
-    if (!goClass) return;
+    C *objClass = findClass("UnityEngine", "Object");
+    if (!goClass || !objClass) return;
     const M *findAll = NULL;
     void *it = NULL;
     const M *candidate;
-    while ((candidate = class_methods(obj, &it))) {
+    while ((candidate = class_methods(objClass, &it))) {
         const char *n = method_name(candidate);
         if (!n || strcmp(n, "FindObjectsOfType") || param_count(candidate) != 1 || method_generic(candidate))
             continue;
@@ -543,7 +544,7 @@ static void probePanels(void) {
     C *goClass = findClass("UnityEngine", "GameObject");
     // get_name is declared on UnityEngine.Object, which GameObject inherits,
     // so a name/arity lookup on GameObject itself finds nothing.
-    const M *nameOf = method(obj, "get_name", 0);
+    const M *nameOf = method(findClass("UnityEngine", "Object"), "get_name", 0);
     const M *setActive = method(goClass, "SetActive", 1);
     const M *getComponentObject = method(findClass("UnityEngine", "Component"), "get_gameObject", 0);
     scanObjects(nameOf, setActive);
