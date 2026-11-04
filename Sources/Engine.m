@@ -7,8 +7,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9"
-#define TWEAK_VERSION_OBJC @"v3.9"
+#define TWEAK_VERSION "v3.10"
+#define TWEAK_VERSION_OBJC @"v3.10"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -46,6 +46,7 @@ static C *(*class_parent)(C *);
 static const char *(*class_name)(C *);
 static const void *(*method_ret)(const M *);
 static uint16_t *(*string_chars)(void *);
+static uint32_t (*array_len)(void *);
 
 static const void *(*method_param)(const M *, uint32_t);
 
@@ -120,6 +121,7 @@ static BOOL initEngine(void) {
     LOAD(corlib, "il2cpp_get_corlib");
 
     *(void **)(&string_chars) = dlsym(RTLD_DEFAULT, "il2cpp_string_chars");
+    *(void **)(&array_len) = dlsym(RTLD_DEFAULT, "il2cpp_array_length");
     *(void **)(&field_name) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_name");
     *(void **)(&field_type) = dlsym(RTLD_DEFAULT, "il2cpp_field_get_type");
     *(void **)(&type_get_name) = dlsym(RTLD_DEFAULT, "il2cpp_type_get_name");
@@ -294,6 +296,20 @@ static void managedName(void *str, char out[25]) {
     out[i] = 0;
 }
 
+// A managed array: header (object 16, bounds 8, length 8) then the elements.
+// il2cpp_array_length is not exported everywhere, so the layout is the fallback.
+static int managedCount(void *arr) {
+    if (!arr) return 0;
+    if (array_len) return (int)array_len(arr);
+    uintptr_t n = *(uintptr_t *)((char *)arr + 24);
+    return n > 5000 ? 0 : (int)n;
+}
+
+static void *managedItem(void *arr, int i) {
+    if (!arr || i < 0) return NULL;
+    return *(void **)((char *)arr + 32 + (size_t)i * sizeof(void *));
+}
+
 static void encName(const char *s, unsigned long long out[2]) {
     out[0] = out[1] = 0;
     for (int i = 0; s && s[i] && i < 16; i++)
@@ -457,6 +473,67 @@ static int restartLooked;
 // actually took effect.
 static int restartPending;
 
+// The game over panel is a UI object with no link from the model. Rather than
+// guessing which class owns it, walk the objects in the scene and look at their
+// names. Names are English even when the labels on screen are not.
+static void scanObjects(const M *nameOf, const M *setActive) {
+    if (!nameOf || !setActive || !obj || !class_type || !type_object) return;
+    C *goClass = findClass("UnityEngine", "GameObject");
+    if (!goClass) return;
+    const M *findAll = NULL;
+    void *it = NULL;
+    const M *candidate;
+    while ((candidate = class_methods(obj, &it))) {
+        const char *n = method_name(candidate);
+        if (!n || strcmp(n, "FindObjectsOfType") || param_count(candidate) != 1 || method_generic(candidate))
+            continue;
+        findAll = candidate;
+        break;
+    }
+    if (!findAll) {
+        NSLog(@"[2048-auto] scene scan unavailable");
+        return;
+    }
+    void *typeObj = type_object(class_type(goClass));
+    if (!typeObj) return;
+    void *par[] = {typeObj};
+    void *arr = call(findAll, NULL, par);
+    if (failedInvocation || !arr) {
+        NSLog(@"[2048-auto] scene scan failed");
+        return;
+    }
+    int total = managedCount(arr);
+    int hits = 0;
+    for (int i = 0; i < total && i < 400; i++) {
+        void *go = managedItem(arr, i);
+        if (!go) continue;
+        void *nm = call(nameOf, go, NULL);
+        if (failedInvocation || !nm) continue;
+        char plain[25];
+        managedName(nm, plain);
+        static const char *logged[] = {"over", "lose", "popup", "dialog", "result", "panel", "canvas",
+                                       "screen", "modal", "window"};
+        int interesting = 0;
+        for (int k = 0; k < 10 && !interesting; k++)
+            if (containsWord(plain, logged[k])) interesting = 1;
+        if (!interesting || hits >= 40) continue;
+        unsigned long long c[3] = {0, 0, 0};
+        encManagedName(nm, c);
+        NSLog(@"[2048-auto] scene object %llx %llx %llx", c[0], c[1], c[2]);
+        hits++;
+        // Only the "you lost" style overlays are switched off: a live panel or
+        // canvas may well be the whole screen.
+        if (containsWord(plain, "over") || containsWord(plain, "lose") || containsWord(plain, "popup") ||
+            containsWord(plain, "dialog")) {
+            uint8_t off = 0;
+            void *p[] = {&off};
+            call(setActive, go, p);
+            NSLog(@"[2048-auto] scene object deactivated");
+        }
+    }
+    NSLog(@"[2048-auto] scene scan: %d objects, %d matched", total, hits);
+}
+
 // The game over panel is a UI object, not part of the model. Restarting the
 // model therefore leaves the panel on screen, and the model can only be moved
 // by the tweak while the player sees a frozen board. Find the panel on the view
@@ -464,9 +541,12 @@ static int restartPending;
 static void probePanels(void) {
     if (!class_fields || !field_name || !field_type || !type_get_name || !field_value) return;
     C *goClass = findClass("UnityEngine", "GameObject");
-    const M *nameOf = method(goClass, "get_name", 0);
+    // get_name is declared on UnityEngine.Object, which GameObject inherits,
+    // so a name/arity lookup on GameObject itself finds nothing.
+    const M *nameOf = method(obj, "get_name", 0);
     const M *setActive = method(goClass, "SetActive", 1);
     const M *getComponentObject = method(findClass("UnityEngine", "Component"), "get_gameObject", 0);
+    scanObjects(nameOf, setActive);
     void *view = call(viewInstance, NULL, NULL);
     if (!view || failedInvocation) return;
     void *it = NULL;

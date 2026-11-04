@@ -113,6 +113,9 @@ v3.4 で探索を深くしたため、1 手あたりの計算時間が増えて�
 - `object <数値>` → その部品の GameObject の名前。
 - `panel deactivated` / `object deactivated` → ゲームオーバーの画面を閉じた、という合図です。
   これが出ても画面が残る場合は、閉じる対象が別の部品です。
+- `scene scan: 120 objects, 2 matched` → 画面の中の部品を数えた結果。
+  続く `scene object <数値>` が、それらしい名前の部品 (パネル・ポップアップなど) です。
+- `scene object deactivated` → その部品を非表示にしました。
 
 ### 盤面は戻るのにゲームオーバー画面が消えない
 盤面 (ゲームの計算) と画面は別々に動いています。`RestartCurrentGameMode` は盤面だけを

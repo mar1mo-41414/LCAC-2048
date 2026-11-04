@@ -15,6 +15,14 @@
 - ON にすると `AUTO` も ON になる (ゲームオーバーは自走中にしか起きないため)。
 - ゲームオーバーの記録 (v3.6) は再挑戦のたびに 1 ブロックずつ増える。
 
+### 実機の v3.9 ビルド: 画面側の部品一覧をとった
+- `GridViewManager` のフィールドは描画用のものだけだった (盤面タイルのプレハブ、`_grid`、
+  `_gameboardInstance` = `Gameboard` など)。ゲームオーバーのパネルは持っていない。
+- `get_name` を `GameObject` から引いていたため名前が取れていなかった
+  (実際は親クラスの `UnityEngine.Object` にある)。v3.10 で修正。
+- v3.10 では**シーン上の GameObject を列挙して名前を見る**方式にした。
+  `over` / `lose` / `popup` / `dialog` を含む名前のものは非表示にする。
+
 ### 実機の v3.8 ビルド: 盤面は戻るがゲームオーバー画面が消えない
 - `restart candidate` の記録から、効いたのは `RestartCurrentGameMode` (戻り値 `System.Void`) と判明。
   呼ぶと盤面は 2 タイルの新しいゲームに戻る (`restart took effect: 2 tiles`)。
