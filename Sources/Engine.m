@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-3"
-#define TWEAK_VERSION_OBJC @"v3.9-3"
+#define TWEAK_VERSION "v3.9-4"
+#define TWEAK_VERSION_OBJC @"v3.9-4"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -100,9 +100,21 @@ static void *call(const M *m, void *obj, void **args) {
     return r;
 }
 
-static BOOL initEngine(void) {
+// initEngine runs on every read (frame), so anything logged from it must be
+// once-only. It also has to appear even when the setup below fails.
+static void logVersionOnce(void) {
+    static int done;
+    if (done) return;
+    done = 1;
     logAuto(@"[2048-auto] tweak " TWEAK_VERSION " starting");
+}
+
+// I_UNITY is transient (the IL2CPP domain comes up late), the rest are final:
+// retrying them every frame only floods the log.
+static BOOL initEngine(void) {
+    logVersionOnce();
     if (ready) return YES;
+    if (initStatus != @"I_START" && initStatus != @"I_UNITY") return NO;
 
     LOAD(domain_get, "il2cpp_domain_get");
     LOAD(assemblies, "il2cpp_domain_get_assemblies");
@@ -232,11 +244,29 @@ static void logOpenFile(void) {
     logFileFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
+// A read runs every frame, so a message logged from one path can repeat
+// thousands of times. Identical consecutive lines are folded into one line per
+// 100 repeats, and the file as a whole stops at LOG_MAX_LINES as a backstop.
+#define LOG_MAX_LINES 20000
+
 static void logAuto(NSString *format, ...) {
     va_list args;
     va_start(args, format);
     NSString *body = [[NSString alloc] initWithFormat:format arguments:args];
     va_end(args);
+    static NSString *lastBody;
+    static int repeats;
+    static int lines;
+    if (lastBody && [body isEqualToString:lastBody]) {
+        repeats++;
+        if (repeats % 100 != 0) return; // 100 回ごとに 1 行だけ残す
+        body = [body stringByAppendingFormat:@" (repeated %d times)", repeats + 1];
+    } else {
+        lastBody = body;
+        repeats = 0;
+    }
+    if (lines >= LOG_MAX_LINES) return;
+    if (++lines == LOG_MAX_LINES) body = [body stringByAppendingString:@" (log limit reached)"];
     static NSDateFormatter *stamp;
     if (!stamp) {
         stamp = [[NSDateFormatter alloc] init];
