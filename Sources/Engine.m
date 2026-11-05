@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-1"
-#define TWEAK_VERSION_OBJC @"v3.9-1"
+#define TWEAK_VERSION "v3.9-2"
+#define TWEAK_VERSION_OBJC @"v3.9-2"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -786,7 +786,6 @@ static void findRestart(void *game) {
 static void *trackedGrid;
 static long long moveCount;
 static int bestTile;
-static int milestoneLogged;
 
 static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
     // Numbers only: os_log masks strings that are passed as arguments.
@@ -807,15 +806,15 @@ static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
     if (grid != trackedGrid || (tiles <= 2 && moveCount > 0)) {
         trackedGrid = grid;
         moveCount = 0;
-        bestTile = 0;
-        milestoneLogged = 0;
+        // 装着した時点で既に載っているタイルは「作った」わけではないので記録しない。
+        bestTile = max;
+        return;
     }
     if (max <= bestTile) return;
     bestTile = max;
     // 2048 以上で、2 の累乗のタイルが増えたときだけ記録する。
     if (max < 2048 || (max & (max - 1)) != 0) return;
     logMilestone(b, readScore(mgr, game), moveCount, max);
-    milestoneLogged = 1;
 }
 
 static void saveGameOver(const int32_t *b, long long score) {
