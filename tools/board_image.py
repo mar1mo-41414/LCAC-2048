@@ -11,8 +11,9 @@
 
 - 画像は PNG (Pillow が必要) か SVG (追加のインストール不要) で出す。
   指定なし (`--format auto`) は Pillow があれば PNG、無ければ SVG。
-- `--half` を付けると、画面に出ている値 (内部値の 1/2) で描く。
-  4 固定のビルドではゲームの内部値と画面の数字が 1 段ずれることがあるため。
+- 数字はログに入っている値そのもの (ゲームの内部値) で描く。画面と同じにしたいときは
+  `--spawn2` を付けると、**4 のタイルだけ 2 と表示**する (4 固定のビルドでは、2 のマスを
+  4 に書き換えても画面が描き直されないため、出現した 4 だけが 2 のまま見える)。
 - `--scale 2` で 2 倍の大きさ (Retina 向け)。`--out` で出力先を指定できる。
 
 配色は**ゲーム本体 (com.ketchapp.2048 4.0.8) の実機スクリーンショットから採取**した値です
@@ -107,9 +108,8 @@ class Block:
     def empties(self) -> int:
         return sum(1 for row in self.rows for v in row if v == 0)
 
-    def summary(self, half: bool = False) -> str:
-        fmt = (lambda v: v // 2 if half else v)
-        top = fmt(self.max_tile)
+    def summary(self, spawn2: bool = False) -> str:
+        top = 2 if (spawn2 and self.max_tile == 4) else self.max_tile
         score = "?" if self.score is None else f"{self.score:,}"
         return f"{self.time_text} {self.version} スコア {score} 最大タイル {top}"
 
@@ -152,9 +152,13 @@ def parse_blocks(text: str) -> list[Block]:
     return blocks
 
 
-def tile_face(value: int, half: bool):
-    """(描く数字, 背景色, 文字色) を返す。"""
-    shown = value // 2 if half else value
+def tile_face(value: int, spawn2: bool):
+    """(描く数字, 背景色, 文字色) を返す。
+
+    spawn2 のときは、出現した 4 のマスだけ画面と同じく 2 として描く。
+    (4 固定はゲームのセルを 2 -> 4 に書き換えるが、画面は描き直されないため)
+    """
+    shown = 2 if (spawn2 and value == 4) else value
     color = TILE_COLORS.get(shown, TILE_HIGH)
     text = TEXT_DARK if shown in TILE_DARK_TEXT else TEXT_LIGHT
     return shown, color, text
@@ -174,11 +178,11 @@ def tile_font_size(digits: int) -> int:
     return 18
 
 
-def caption_lines(block: Block, half: bool) -> list[str]:
+def caption_lines(block: Block, spawn2: bool) -> list[str]:
     """画像の下に出す 2 行。文字化けを避けるため、画像内の文字は英字だけにする。"""
     score = "?" if block.score is None else f"{block.score:,}"
-    top = block.max_tile // 2 if half else block.max_tile
-    note = "screen values" if half else "raw board values"
+    top = 2 if (spawn2 and block.max_tile == 4) else block.max_tile
+    note = "as shown (4 -> 2)" if spawn2 else "board values"
     return [
         f"{block.version}   {display_time(block.time_text)}",
         f"score {score}    max tile {top:,}    empty {block.empties}    ({note})",
@@ -197,7 +201,7 @@ def find_font_path() -> str | None:
     return None
 
 
-def render_png(block: Block, path: str, half: bool, scale: float) -> None:
+def render_png(block: Block, path: str, spawn2: bool, scale: float) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
     def px(v: float) -> int:
@@ -238,7 +242,7 @@ def render_png(block: Block, path: str, half: bool, scale: float) -> None:
             draw.rounded_rectangle([left, upper, right, lower], radius=px(8), fill=CELL_COLOR)
             if value <= 0:
                 continue
-            shown, color, text = tile_face(value, half)
+            shown, color, text = tile_face(value, spawn2)
             draw.rounded_rectangle([left, upper, right, lower], radius=px(8), fill=color)
             draw.text(
                 ((left + right) / 2, (upper + lower) / 2),
@@ -249,7 +253,7 @@ def render_png(block: Block, path: str, half: bool, scale: float) -> None:
             )
 
     # 版・時刻・スコアの説明。盤面の幅に収まるよう、入りきらない行だけ小さくする。
-    line1, line2 = caption_lines(block, half)
+    line1, line2 = caption_lines(block, spawn2)
     base = top + px(BOARD_H) + px(16)
 
     def fitted(text_line: str, size: float):
@@ -267,7 +271,7 @@ def render_png(block: Block, path: str, half: bool, scale: float) -> None:
     img.save(path)
 
 
-def render_svg(block: Block, path: str, half: bool, scale: float) -> None:
+def render_svg(block: Block, path: str, spawn2: bool, scale: float) -> None:
     sans = "Helvetica, Arial, 'Hiragino Sans', 'Noto Sans JP', sans-serif"
     width = (BOARD_W + 2 * MARGIN) * scale
     height = (MARGIN + TITLE_H + BOARD_H + FOOTER_H + MARGIN) * scale
@@ -306,11 +310,11 @@ def render_svg(block: Block, path: str, half: bool, scale: float) -> None:
             rect(left, upper, CELL, CELL, 8, CELL_COLOR)
             if value <= 0:
                 continue
-            shown, color, fill = tile_face(value, half)
+            shown, color, fill = tile_face(value, spawn2)
             rect(left, upper, CELL, CELL, 8, color)
             text(left + CELL / 2, upper + CELL / 2, str(shown), tile_font_size(len(str(shown))), fill, "middle")
 
-    line1, line2 = caption_lines(block, half)
+    line1, line2 = caption_lines(block, spawn2)
     base = top + BOARD_H + 16
     text(MARGIN, base + 8, line1, 15, TEXT_MUTED)
     text(MARGIN, base + 32, line2, 16, TEXT_DARK)
@@ -334,7 +338,7 @@ def main(argv=None) -> int:
     parser.add_argument("--list", action="store_true", help="記録されているゲームを一覧するだけで終わる")
     parser.add_argument("--out", default=None, help="出力ファイル (既定: ログと同じ場所に board_<n>.png)")
     parser.add_argument("--format", choices=["auto", "png", "svg"], default="auto")
-    parser.add_argument("--half", action="store_true", help="画面に出ている値 (内部値の 1/2) で描く")
+    parser.add_argument("--spawn2", action="store_true", help="画面と同じく、出現した 4 を 2 として描く")
     parser.add_argument("--scale", type=float, default=1.0, help="倍率 (Retina 向けは 2)")
     args = parser.parse_args(argv)
 
@@ -353,7 +357,7 @@ def main(argv=None) -> int:
 
     if args.list:
         for i, block in enumerate(blocks, 1):
-            print(f"{i:3d}. {block.summary(args.half)}")
+            print(f"{i:3d}. {block.summary(args.spawn2)}")
         return 0
 
     index = -1 if args.block is None else args.block
@@ -384,14 +388,14 @@ def main(argv=None) -> int:
 
     if fmt == "png":
         try:
-            render_png(block, out_path, args.half, args.scale)
+            render_png(block, out_path, args.spawn2, args.scale)
         except ImportError:
             print("Pillow がありません。`pip install pillow` か --format svg を使ってください", file=sys.stderr)
             return 1
     else:
-        render_svg(block, out_path, args.half, args.scale)
+        render_svg(block, out_path, args.spawn2, args.scale)
 
-    print(f"{number}/{len(blocks)}: {block.summary(args.half)}")
+    print(f"{number}/{len(blocks)}: {block.summary(args.spawn2)}")
     print(out_path)
     return 0
 

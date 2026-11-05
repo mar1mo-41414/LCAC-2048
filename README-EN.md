@@ -144,8 +144,9 @@ pbpaste | python3 tools/board_image.py -                    # pass a single bloc
 
 - PNG output needs Pillow (`pip install pillow`); without it the script writes SVG, which
   opens in any browser or Quick Look (`--format svg` forces it).
-- Numbers come from the log (internal values). With the forced-4 builds the screen can show
-  one step lower; add `--half` to draw the on-screen numbers instead.
+- Numbers are the log's own values (the game's internal values). Add `--spawn2` to match the
+  screen, which renders **only a freshly spawned 4 as "2"** (the forced-4 builds rewrite the cell
+  to 4 without redrawing it). Every other tile reads the same on screen and in the log.
 - `--scale 2` for a larger image, `--out FILE` to choose the output path.
 - Colours are **sampled from real screenshots of the game itself (`com.ketchapp.2048` 4.0.8)**:
   tiles, board frame, empty cells and background. 16,384 and above are not sampled yet
