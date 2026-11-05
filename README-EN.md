@@ -130,6 +130,24 @@ make simulate    # quick simulation (3 games × 5,000 moves; takes a few minutes
 The same checks run in GitHub Actions (`.github/workflows/tests.yml`).
 `Engine.m` / `Controller.m` need the iOS SDK and a device, so CI does not build them.
 
+## Turning a score log block into a board image
+
+`tools/board_image.py` draws one game from `Documents/LCAC-2048_over.log` as an image
+that looks like the game itself, score included.
+
+```bash
+python3 tools/board_image.py LCAC-2048_over.log --list      # list the recorded games
+python3 tools/board_image.py LCAC-2048_over.log             # the last game as PNG
+python3 tools/board_image.py LCAC-2048_over.log --block 12  # the 12th game
+pbpaste | python3 tools/board_image.py -                    # pass a single block
+```
+
+- PNG output needs Pillow (`pip install pillow`); without it the script writes SVG, which
+  opens in any browser or Quick Look (`--format svg` forces it).
+- Numbers come from the log (internal values). With the forced-4 builds the screen can show
+  one step lower; add `--half` to draw the on-screen numbers instead.
+- `--scale 2` for a larger image, `--out FILE` to choose the output path.
+
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it works (game objects, search, threading, states)

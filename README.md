@@ -137,6 +137,24 @@ cc -O2 -Wall -Wextra tests/simulate.c Sources/Solver.c -lm -o /tmp/sim && /tmp/s
 同じ内容を GitHub Actions (`.github/workflows/tests.yml`) で実行しています。
 `Engine.m` / `Controller.m` は iOS SDK と実機が要るため、CI ではビルドしていません。
 
+## スコアログを盤面画像にする
+
+`Documents/LCAC-2048_over.log` の 1 ゲーム分から、ゲームと同じ見た目の盤面画像 (PNG / SVG) を作る
+スクリプトがあります。スコアも画像に入ります。
+
+```bash
+python3 tools/board_image.py LCAC-2048_over.log --list      # 記録の一覧
+python3 tools/board_image.py LCAC-2048_over.log             # 最後のゲームを PNG に
+python3 tools/board_image.py LCAC-2048_over.log --block 12  # 12 番目のゲーム
+pbpaste | python3 tools/board_image.py -                    # 1 ブロックだけ貼り付けて渡す
+```
+
+- PNG は Pillow が必要です (`pip install pillow`)。無い場合は SVG で出るので、ブラウザや
+  Quick Look で開けます (`--format svg` で明示もできます)。
+- 画像の数字はログの値 (内部値) です。4 固定のビルドでは画面の数字が 1 段下になることがあるため、
+  画面と同じ数字にしたいときは `--half` を付けます。
+- `--scale 2` で 2 倍の大きさ、`--out FILE` で出力先を指定できます。
+
 ## ドキュメント
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 仕組み (ゲーム側の構造、探索、スレッド、状態)

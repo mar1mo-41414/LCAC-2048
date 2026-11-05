@@ -34,6 +34,10 @@
   `ENDGAME_BUDGET_MULT` を `1` にすれば v3.8 に近い速さに戻る。
 - 探索のパラメータと評価の重みを `-D` で差し替えられるようにし、`tests/simulate.c` は
   スコアも集計するようにした (ベンチの手順は docs/ARCHITECTURE.md)。
+- **スコアログから盤面画像を作る `tools/board_image.py` を追加**。`Documents/LCAC-2048_over.log` の
+  1 ゲーム分を入力に、ゲームと同じ配色・形の盤面とスコアを PNG / SVG で書き出す
+  (`--list` で一覧、`--block N` で選ぶ、`--half` で画面表示の値、`--scale 2` で拡大)。
+  Pillow が無い環境でも SVG で出せるので、追加のインストールなしで使える。
 - 試したが**採らなかった**もの: 評価の重みの変更 (`W_EMPTY` / `W_OPEN` / `W_MONO` / `W_SNAKE` /
   `W_MERGE` / `W_SMOOTH` / `W_CORNER` / 終盤の重み付け)、出現位置のサンプル数の変更 (2 / 6 / 8)、
   最悪ケース寄りの評価、深さだけを増やす設定 (60 万ノード・最大 8 手を常時)、
