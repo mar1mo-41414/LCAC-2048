@@ -226,11 +226,21 @@ def render_png(block: Block, path: str, half: bool, scale: float) -> None:
                 anchor="mm",
             )
 
-    # 版・時刻・スコアの説明。
+    # 版・時刻・スコアの説明。盤面の幅に収まるよう、入りきらない行だけ小さくする。
     line1, line2 = caption_lines(block, half)
     base = top + px(BOARD_H) + px(16)
-    draw.text((px(MARGIN), base), line1, font=font(15), fill=TEXT_MUTED)
-    draw.text((px(MARGIN), base + px(24)), line2, font=font(16), fill=TEXT_DARK)
+
+    def fitted(text_line: str, size: float):
+        for candidate in (size, size - 1, size - 2, size - 3, size - 4):
+            if candidate < 10:
+                break
+            f = font(candidate)
+            if draw.textlength(text_line, font=f) <= px(BOARD_W):
+                return f
+        return font(max(size - 4, 10))
+
+    draw.text((px(MARGIN), base), line1, font=fitted(line1, 15), fill=TEXT_MUTED)
+    draw.text((px(MARGIN), base + px(24)), line2, font=fitted(line2, 16), fill=TEXT_DARK)
 
     img.save(path)
 
