@@ -147,6 +147,9 @@ pbpaste | python3 tools/board_image.py -                    # pass a single bloc
 - Numbers come from the log (internal values). With the forced-4 builds the screen can show
   one step lower; add `--half` to draw the on-screen numbers instead.
 - `--scale 2` for a larger image, `--out FILE` to choose the output path.
+- Colours are **sampled from real screenshots of the game itself (`com.ketchapp.2048` 4.0.8)**:
+  tiles, board frame, empty cells and background. 16,384 and above are not sampled yet
+  and are drawn in dark grey.
 
 ## Documentation
 
