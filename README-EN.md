@@ -144,6 +144,8 @@ pbpaste | python3 tools/board_image.py -                    # pass a single bloc
 
 - PNG output needs Pillow (`pip install pillow`); without it the script writes SVG, which
   opens in any browser or Quick Look (`--format svg` forces it).
+- **Board orientation**: the log stores rows in the game's own order (row 1 is the bottom row on
+  screen), so the image flips them to match the screen. Use `--raw-order` for the log's order.
 - Numbers are the log's own values (the game's internal values). Add `--spawn2` to match the
   screen, which renders **only a freshly spawned 4 as "2"** (the forced-4 builds rewrite the cell
   to 4 without redrawing it). Every other tile reads the same on screen and in the log.

@@ -11,6 +11,8 @@
 
 - 画像は PNG (Pillow が必要) か SVG (追加のインストール不要) で出す。
   指定なし (`--format auto`) は Pillow があれば PNG、無ければ SVG。
+- 盤面の向き: ログはゲームの座標順 (y=0 が画面の**最下段**) で書かれているため、
+  画像では上下を反転して画面と同じ向きに描く。ログと同じ順で見たいときは `--raw-order`。
 - 数字はログに入っている値そのもの (ゲームの内部値) で描く。画面と同じにしたいときは
   `--spawn2` を付けると、**4 のタイルだけ 2 と表示**する (4 固定のビルドでは、2 のマスを
   4 に書き換えても画面が描き直されないため、出現した 4 だけが 2 のまま見える)。
@@ -201,7 +203,12 @@ def find_font_path() -> str | None:
     return None
 
 
-def render_png(block: Block, path: str, spawn2: bool, scale: float) -> None:
+def board_rows(block: Block, raw_order: bool):
+    """画像に描く順の行。(ログは最下段が先頭なので、既定では上下を反転する)"""
+    return list(block.rows) if raw_order else list(reversed(block.rows))
+
+
+def render_png(block: Block, path: str, spawn2: bool, scale: float, raw_order: bool = False) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
     def px(v: float) -> int:
@@ -234,7 +241,7 @@ def render_png(block: Block, path: str, spawn2: bool, scale: float) -> None:
     # 盤面。
     top = px(MARGIN + TITLE_H)
     draw.rounded_rectangle([px(MARGIN), top, px(MARGIN + BOARD_W), top + px(BOARD_H)], radius=px(10), fill=BOARD)
-    for y, row in enumerate(block.rows):
+    for y, row in enumerate(board_rows(block, raw_order)):
         for x, value in enumerate(row):
             left = px(MARGIN + GAP + x * (CELL + GAP))
             upper = top + px(GAP + y * (CELL + GAP))
@@ -271,7 +278,7 @@ def render_png(block: Block, path: str, spawn2: bool, scale: float) -> None:
     img.save(path)
 
 
-def render_svg(block: Block, path: str, spawn2: bool, scale: float) -> None:
+def render_svg(block: Block, path: str, spawn2: bool, scale: float, raw_order: bool = False) -> None:
     sans = "Helvetica, Arial, 'Hiragino Sans', 'Noto Sans JP', sans-serif"
     width = (BOARD_W + 2 * MARGIN) * scale
     height = (MARGIN + TITLE_H + BOARD_H + FOOTER_H + MARGIN) * scale
@@ -303,7 +310,7 @@ def render_svg(block: Block, path: str, spawn2: bool, scale: float) -> None:
 
     top = MARGIN + TITLE_H
     rect(MARGIN, top, BOARD_W, BOARD_H, 10, BOARD)
-    for y, row in enumerate(block.rows):
+    for y, row in enumerate(board_rows(block, raw_order)):
         for x, value in enumerate(row):
             left = MARGIN + GAP + x * (CELL + GAP)
             upper = top + GAP + y * (CELL + GAP)
@@ -339,6 +346,7 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default=None, help="出力ファイル (既定: ログと同じ場所に board_<n>.png)")
     parser.add_argument("--format", choices=["auto", "png", "svg"], default="auto")
     parser.add_argument("--spawn2", action="store_true", help="画面と同じく、出現した 4 を 2 として描く")
+    parser.add_argument("--raw-order", action="store_true", help="ログの順 (最下段が先頭) のまま描く")
     parser.add_argument("--scale", type=float, default=1.0, help="倍率 (Retina 向けは 2)")
     args = parser.parse_args(argv)
 
@@ -388,12 +396,12 @@ def main(argv=None) -> int:
 
     if fmt == "png":
         try:
-            render_png(block, out_path, args.spawn2, args.scale)
+            render_png(block, out_path, args.spawn2, args.scale, args.raw_order)
         except ImportError:
             print("Pillow がありません。`pip install pillow` か --format svg を使ってください", file=sys.stderr)
             return 1
     else:
-        render_svg(block, out_path, args.spawn2, args.scale)
+        render_svg(block, out_path, args.spawn2, args.scale, args.raw_order)
 
     print(f"{number}/{len(blocks)}: {block.summary(args.spawn2)}")
     print(out_path)

@@ -729,6 +729,9 @@ static void saveGameOver(const int32_t *b, long long score) {
     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss Z"];
     NSString *when = [formatter stringFromDate:[NSDate date]];
 
+    // The game's grid counts y from the bottom of the screen, so the first row
+    // written here is the bottom row of the board. tools/board_image.py turns
+    // the block back into a picture and flips it to match the screen.
     NSMutableString *text = [NSMutableString string];
     [text appendFormat:@"%@ %@ score=%lld\n", when, TWEAK_VERSION_OBJC, score];
     for (int y = 0; y < 4; y++)
