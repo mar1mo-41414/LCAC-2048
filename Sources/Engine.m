@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-6"
-#define TWEAK_VERSION_OBJC @"v3.9-6"
+#define TWEAK_VERSION "v3.9-7"
+#define TWEAK_VERSION_OBJC @"v3.9-7"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -270,6 +270,8 @@ static void logAuto(NSString *format, ...) {
     static NSDateFormatter *stamp;
     if (!stamp) {
         stamp = [[NSDateFormatter alloc] init];
+        // The device locale would print 午前/午後 and break every log parser.
+        [stamp setLocale:[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]];
         [stamp setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     }
     NSString *text = [NSString stringWithFormat:@"%@ %@\n", [stamp stringFromDate:[NSDate date]], body];
@@ -805,6 +807,11 @@ static void *trackedGrid;
 static long long moveCount;
 static int bestTile;
 static long long progressAt;
+// 出現位置の分布。アプリの抽選が一様かどうかを実機で測るためのもの。
+// spawnCount = そのマスに出た回数、spawnChance = そのマスが空いていた回数。
+static int spawnCount[16];
+static int spawnChance[16];
+static int spawnMiss;
 
 static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
     logAuto(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
@@ -834,6 +841,8 @@ static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
         trackedGrid = grid;
         moveCount = 0;
         progressAt = 0;
+        for (int i = 0; i < 16; i++) spawnCount[i] = spawnChance[i] = 0;
+        spawnMiss = 0;
         // 装着した時点で既に載っているタイルは「作った」わけではないので記録しない。
         bestTile = max;
         return;
@@ -847,6 +856,19 @@ static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
     // 2048 以上で、2 の累乗のタイルが増えたときだけ記録する。
     if (max < 2048 || (max & (max - 1)) != 0) return;
     logMilestone(b, readScore(mgr, game), moveCount, max);
+}
+
+// Logged once per game so that the spawn distribution can be compared with the
+// uniform draw the solver assumes.
+static void logSpawnHistogram(void) {
+    logAuto(@"[2048-auto] spawns miss=%d count %d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d chance "
+           "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+          spawnMiss, spawnCount[0], spawnCount[1], spawnCount[2], spawnCount[3], spawnCount[4], spawnCount[5],
+          spawnCount[6], spawnCount[7], spawnCount[8], spawnCount[9], spawnCount[10], spawnCount[11],
+          spawnCount[12], spawnCount[13], spawnCount[14], spawnCount[15], spawnChance[0], spawnChance[1],
+          spawnChance[2], spawnChance[3], spawnChance[4], spawnChance[5], spawnChance[6], spawnChance[7],
+          spawnChance[8], spawnChance[9], spawnChance[10], spawnChance[11], spawnChance[12], spawnChance[13],
+          spawnChance[14], spawnChance[15]);
 }
 
 static void saveGameOver(const int32_t *b, long long score) {
@@ -885,6 +907,7 @@ static void noteGameOver(const int32_t *board, void *mgr, void *game) {
     if (gameOverLogged) return;
     gameOverLogged = 1;
     saveGameOver(board, readScore(mgr, game));
+    logSpawnHistogram();
     logAuto(@"[2048-auto] game over: board saved");
 }
 
@@ -1124,6 +1147,14 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
                 at = i;
             } else if (out->board[i] != expected[i])
                 added = 99;
+        // 出現位置の集計: 予測盤面で空いていたマスが候補になる。
+        if (added == 1 && at >= 0) {
+            spawnCount[at]++;
+            for (int i = 0; i < 16; i++)
+                if (!expected[i]) spawnChance[i]++;
+        } else {
+            spawnMiss++;
+        }
         if (converting && diagLeft > 0) logBoard(2, expected);
         // A mismatch between the prediction and the board is no longer treated
         // as "the game ignores the rewrite": playing by hand or restarting a
