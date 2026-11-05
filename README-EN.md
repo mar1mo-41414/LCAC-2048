@@ -9,7 +9,7 @@ It searches up to eight moves ahead late in a game and picks the next swipe. **R
 - **Automatic moves** — scores legal moves using empty cells, monotonicity, a snake pattern and more.
   Empty cells are scored by count and by whether they are connected to other free space.
   When the two highest tiles can be joined, it always takes that move.
-- **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX`.
+- **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX` (`MAX` has no wait; only the search and the tile animation take time).
 - **Deeper search** — a per-move node budget, so the search reads 4 to 6 moves ahead.
   Once four or fewer cells are free it widens the budget four times and reads up to eight moves ahead
   (the tree is small there, so this costs very little time).

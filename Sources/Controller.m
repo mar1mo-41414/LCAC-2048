@@ -6,7 +6,10 @@
 static NSString *const SpeedKey = @"Auto2048.speed";
 // Minimum delay after a move, in seconds, for x1 / x2 / x4 / MAX.
 // The real interval is longer when the search or the tile animation takes time.
-static const double Intervals[] = {0.45, 0.32, 0.22, 0.15};
+// MAX has no wait at all: the next move is considered as soon as the previous
+// one is done, so the only time spent per move is the search plus the seconds
+// the game itself needs to settle its tiles.
+static const double Intervals[] = {0.45, 0.32, 0.22, 0.0};
 static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
 
 @interface Auto2048Controller : NSObject

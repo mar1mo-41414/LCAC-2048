@@ -135,8 +135,9 @@ cc -O2 -I Sources -DENDGAME_BUDGET_MULT=1 tests/simulate.c Sources/Solver.c -lm 
 ## AUTO ボタンと状態
 
 起動時 OFF。タップで ON/OFF、長押しで速度を切り替えます。速度は保存されますが ON/OFF は保存されません。
-操作後の最低待ち時間は x1 = 0.45 秒、x2 = 0.32 秒、x4 = 0.22 秒、MAX = 0.15 秒です。
-探索時間・アニメーション等により実際の間隔は長くなります。
+操作後の最低待ち時間は x1 = 0.45 秒、x2 = 0.32 秒、x4 = 0.22 秒、**MAX = 待ちなし (0)** です。
+MAX では前の 1 手が終わり次第すぐ次の手を考えます。実際の間隔は探索時間とゲームのタイル
+アニメーション待ちだけで決まります。
 
 状態表示は `Sources/Controller.m` の `status`、ゲーム側の状態は `Sources/Engine.m` が返す文字列です。
 表示ごとの意味と対処は [TROUBLESHOOTING.md](TROUBLESHOOTING.md#状態表示の一覧) にまとめています。
