@@ -15,6 +15,8 @@ int main(int argc,char **argv){int games=argc>1?atoi(argv[1]):3;int maxmoves=arg
    for(int r=1;r<31;r++) if(ac[r+1]>bc[r+1]) score+=(long)(ac[r+1]-bc[r+1])<<(r+1);
    for(int i=0;i<16;i++) b[i]=out[i];
    spawn(b);step++;
+   if(step%500==0){int m2=0;for(int i=0;i<16;i++)if(b[i]>m2)m2=b[i];printf("  progress moves=%d score=%ld board",step,score);
+    for(int i=0;i<16;i++)printf("%s%d",i?",":"",b[i]);printf("\n");fflush(stdout);}
    /* 実機の実行ログと同じ形: 2048 以上のタイルが増えた時点を残す */
    {int m=0;for(int i=0;i<16;i++)if(b[i]>m)m=b[i];
     if(m>best){best=m;if(m>=2048&&!(m&(m-1)))printf("  milestone tile=%d score=%ld moves=%d\n",m,score,step);fflush(stdout);}}}

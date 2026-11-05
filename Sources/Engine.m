@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-4"
-#define TWEAK_VERSION_OBJC @"v3.9-4"
+#define TWEAK_VERSION "v3.9-5"
+#define TWEAK_VERSION_OBJC @"v3.9-5"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -804,11 +804,21 @@ static void findRestart(void *game) {
 static void *trackedGrid;
 static long long moveCount;
 static int bestTile;
+static long long progressAt;
 
 static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
     logAuto(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
            "%d,%d,%d,%d",
           tile, score, moves, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
+          b[13], b[14], b[15]);
+}
+
+// 500 手ごとの経過。8,192 を作ったあとにどこで崩れるかを見るための記録で、
+// milestone と同じ並び (1 行目が画面の一番下) で盤面を残す。
+static void logProgress(const int32_t *b, long long score, long long moves) {
+    logAuto(@"[2048-auto] progress moves=%lld score=%lld board %d,%d,%d,%d | %d,%d,%d,%d | "
+           "%d,%d,%d,%d | %d,%d,%d,%d",
+          moves, score, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
           b[13], b[14], b[15]);
 }
 
@@ -823,9 +833,14 @@ static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
     if (grid != trackedGrid || (tiles <= 2 && moveCount > 0)) {
         trackedGrid = grid;
         moveCount = 0;
+        progressAt = 0;
         // 装着した時点で既に載っているタイルは「作った」わけではないので記録しない。
         bestTile = max;
         return;
+    }
+    if (moveCount >= progressAt + 500) {
+        progressAt = moveCount;
+        logProgress(b, readScore(mgr, game), moveCount);
     }
     if (max <= bestTile) return;
     bestTile = max;
