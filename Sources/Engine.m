@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-7"
-#define TWEAK_VERSION_OBJC @"v3.9-7"
+#define TWEAK_VERSION "v3.9-8"
+#define TWEAK_VERSION_OBJC @"v3.9-8"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -578,8 +578,11 @@ static int restartLooked;
 // Set when a restart was asked for; the next readable board reports whether it
 // actually took effect.
 static int restartPending;
-// Consecutive reads that came back as PAUSE.
-static int pauseStreak;
+// When the game first came back as PAUSE. A pause is normal (game over screen,
+// achievement screen, ad) and must never be turned into a restart on its own:
+// doing that throws away a game that is still playable.
+static double pauseSince;
+static int pauseLogged;
 
 // The game over screen is not part of the model, so restarting the model leaves
 // it on screen. The scene tree says which object it is:
@@ -914,7 +917,7 @@ static void noteGameOver(const int32_t *board, void *mgr, void *game) {
 // Called when the game has already stopped taking input: the board is still
 // readable there, and that is where the final position usually shows up.
 static void checkGameOverQuietly(void *mgr, void *game) {
-    if (gameOverLogged || !getGrid || !getCell) return;
+    if (!getGrid || !getCell) return;
     void *grid = call(getGrid, game, NULL);
     if (failedInvocation || !grid) return;
     int32_t b[16];
@@ -927,7 +930,20 @@ static void checkGameOverQuietly(void *mgr, void *game) {
             b[x + 4 * y] = *(int32_t *)unbox(box);
         }
     }
+    // A win screen can appear the instant a big tile is built, so the board has
+    // to count for the milestones here as well; otherwise that tile is lost from
+    // the log.
+    trackProgress(grid, b, mgr, game);
     noteGameOver(b, mgr, game);
+    // Long pause with a playable board: keep the position in the log and wait.
+    double now = [NSDate timeIntervalSinceReferenceDate];
+    if (pauseSince == 0) pauseSince = now;
+    if (!pauseLogged && now - pauseSince > 5.0) {
+        pauseLogged = 1;
+        logAuto(@"[2048-auto] paused 5 s; board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14],
+                b[15]);
+    }
 }
 
 // What draws the board, and where the cells live. Logged once so the next
@@ -1029,17 +1045,14 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     void *box = call(active, game, NULL);
     if (failedInvocation || !box || !*(uint8_t *)unbox(box)) {
         // The game stops taking input once it is over, and that is exactly when
-        // the last board has to be written out.
+        // the last board has to be written out. While the board can still move
+        // this is only a screen (achievement, ad, menu), so nothing is
+        // restarted: the player decides.
         checkGameOverQuietly(mgr, game);
-        // Still inactive a few seconds later while the board is not dead: the
-        // game is stuck rather than finished. Ask for the restart path.
-        if (!gameOverLogged && ++pauseStreak >= 12) {
-            pauseStreak = 0;
-            gameOverLogged = 1;
-            logAuto(@"[2048-auto] game stuck; asking for a restart");
-        }
         return @"PAUSE";
     }
+    pauseSince = 0;
+    pauseLogged = 0;
 
     void *grid = call(getGrid, game, NULL);
     if (failedInvocation) return @"G_EXC";
@@ -1101,7 +1114,6 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             }
         }
     }
-    pauseStreak = 0;
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
     trackProgress(grid, board, mgr, game);
     // The game may put the panel back a frame later, so sweep a couple of times.
