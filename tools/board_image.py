@@ -42,9 +42,12 @@ TILE_COLORS = {
     512: "#edc850",
     1024: "#edc53f",
     2048: "#edc22e",
+    # 4096 以上は実機のスクリーンショットから採取 (薄い緑 -> 緑)。
+    4096: "#81d79a",
+    8192: "#5bb96f",
 }
 TILE_DARK_TEXT = {2, 4}  # 薄いタイルは濃い文字
-TILE_HIGH = "#3c3a32"  # 4096 以上
+TILE_HIGH = "#3c3a32"  # 16,384 以上 (ゲーム側の色が未確認のため濃いグレー)
 
 FONT_CANDIDATES_BOLD = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
