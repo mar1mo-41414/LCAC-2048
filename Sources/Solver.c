@@ -43,22 +43,48 @@ int solver_move(const int32_t *in, int dir, int32_t *out) {
     return memcmp(in, out, 16 * sizeof(*out)) != 0;
 }
 
-// DEPTH is the shallowest lookahead. The search then deepens one ply at a
-// time, as long as NODE_BUDGET is not spent: cramped boards have a small tree,
-// so the endgame gets read further ahead without a per-move time spike.
+// Search size. DEPTH is the shallowest lookahead; the search then deepens one
+// ply at a time, as long as the node budget is not spent: cramped boards have a
+// small tree, so the endgame gets read further ahead without a per-move time
+// spike. The defaults are the shipping values; they are macros so that a
+// benchmark can build a cheaper solver (-DDEPTH=3 -DNODE_BUDGET=25000) and
+// compare evaluation weights without waiting minutes per game.
+#ifndef DEPTH
+#define DEPTH 4
+#endif
+#ifndef MAX_DEPTH
+#define MAX_DEPTH 6
+#endif
+#ifndef NODE_BUDGET
+#define NODE_BUDGET 200000 // board nodes per move; deeper costs more time
+#endif
+#ifndef SAMPLE_CELLS
+#define SAMPLE_CELLS 4
+#endif
+#ifndef MERGE_MAX_BONUS
+#define MERGE_MAX_BONUS 1500
+#endif
+#ifndef MERGE_MAX_FROM
+#define MERGE_MAX_FROM 9
+#endif
+// Cramped boards have a small tree, so the endgame can be read much further
+// ahead for very little extra time - and that is where a wrong move ends the
+// game. These three settings widen the search once few cells are free.
+#ifndef ENDGAME_EMPTY
+#define ENDGAME_EMPTY 4 // free cells at which the wider endgame search starts
+#endif
+#ifndef ENDGAME_BUDGET_MULT
+#define ENDGAME_BUDGET_MULT 4
+#endif
+#ifndef ENDGAME_MAX_DEPTH
+#define ENDGAME_MAX_DEPTH 8
+#endif
+
+#ifndef CACHE_BITS
+#define CACHE_BITS 15
+#endif
 enum {
-    DEPTH = 4,
-    MAX_DEPTH = 6,
-    NODE_BUDGET = 200000, // board nodes per move; deeper costs more time
-    CACHE_BITS = 15,
-    CACHE_SIZE = 1 << CACHE_BITS,
-    SAMPLE_CELLS = 4,
-    // Score bonus for a move that joins two copies of the highest tile. Parking
-    // such a pair to "keep it for later" is how the board jams up. Only big
-    // tiles are forced (512 = 2^9); forcing 2s and 4s to merge early just
-    // breaks the snake order.
-    MERGE_MAX_BONUS = 1500,
-    MERGE_MAX_FROM = 9
+    CACHE_SIZE = 1 << CACHE_BITS
 };
 
 typedef struct {
@@ -153,6 +179,34 @@ static int move_rank(const uint8_t in[16], int dir, uint8_t out[16]) {
     return memcmp(in, out, 16) != 0;
 }
 
+#ifndef W_EMPTY
+#define W_EMPTY 260.0
+#endif
+#ifndef W_OPEN
+#define W_OPEN 200.0
+#endif
+#ifndef W_EMPTY_TIGHT
+#define W_EMPTY_TIGHT 1.0
+#endif
+#ifndef W_OPEN_TIGHT
+#define W_OPEN_TIGHT 1.0
+#endif
+#ifndef W_MONO
+#define W_MONO 22.0
+#endif
+#ifndef W_SMOOTH
+#define W_SMOOTH 5.0
+#endif
+#ifndef W_MERGE
+#define W_MERGE 18.0
+#endif
+#ifndef W_SNAKE
+#define W_SNAKE 1.5
+#endif
+#ifndef W_CORNER
+#define W_CORNER 30.0
+#endif
+
 // Rotated and reflected snake ordering. The best orientation may change as the
 // board changes; no fixed corner is artificially enforced.
 static double evaluate(const uint8_t b[16]) {
@@ -220,8 +274,16 @@ static double evaluate(const uint8_t b[16]) {
 
     int corner = highest && (b[0] == highest || b[3] == highest || b[12] == highest || b[15] == highest);
 
-    return empty * 260.0 + open * 200.0 + mono * 22.0 + smooth * 5.0 + merge * 18.0 + bestSnake * 1.5 +
-           (corner ? highest * 30.0 : 0.0);
+    // Weights are macros so a benchmark can compare variants.
+    double wEmpty = W_EMPTY, wOpen = W_OPEN;
+    if (empty <= 3) {
+        // Late game: free space is worth much more than the counts suggest,
+        // because the next spawn can end the game.
+        wEmpty *= W_EMPTY_TIGHT;
+        wOpen *= W_OPEN_TIGHT;
+    }
+    return empty * wEmpty + open * wOpen + mono * W_MONO + smooth * W_SMOOTH + merge * W_MERGE +
+           bestSnake * W_SNAKE + (corner ? highest * W_CORNER : 0.0);
 }
 
 static double player(Search *s, const uint8_t b[16], int depth);
@@ -302,6 +364,17 @@ int solver_best(const int32_t *in) {
     for (int i = 0; i < 16; i++)
         if (b[i] > highest) highest = b[i];
 
+    int empty = 0;
+    for (int i = 0; i < 16; i++)
+        if (!b[i]) empty++;
+
+    long budget = NODE_BUDGET;
+    int maxDepth = MAX_DEPTH;
+    if (ENDGAME_EMPTY > 0 && empty <= ENDGAME_EMPTY) {
+        budget *= ENDGAME_BUDGET_MULT;
+        if (ENDGAME_MAX_DEPTH > maxDepth) maxDepth = ENDGAME_MAX_DEPTH;
+    }
+
     Search s = {calloc(CACHE_SIZE, sizeof(Entry)), 0};
     int choice = -1;
     long spent = 0;
@@ -309,7 +382,7 @@ int solver_best(const int32_t *in) {
 
     // Deepen one ply at a time while the tree stays inside NODE_BUDGET. The
     // node count is deterministic, so the same board always gets the same move.
-    for (int depth = DEPTH; depth <= MAX_DEPTH; depth++) {
+    for (int depth = DEPTH; depth <= maxDepth; depth++) {
         double best = -1e100;
         int move = -1;
         long before = s.nodes;
@@ -334,7 +407,7 @@ int solver_best(const int32_t *in) {
         choice = move;
         spent += s.nodes - before;
         // The next ply costs roughly five times this one; stop if it does not fit.
-        if ((NODE_BUDGET - spent) < 5 * (s.nodes - before)) break;
+        if ((budget - spent) < 5 * (s.nodes - before)) break;
     }
 
     free(s.cache);

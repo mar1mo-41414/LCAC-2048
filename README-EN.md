@@ -4,13 +4,15 @@
 
 A tweak (dylib) that plays the regular mode of **2048** (`com.ketchapp.2048`) on
 [LiveContainer](https://github.com/LiveContainer/LiveContainer).
-It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is not guaranteed.**
+It searches up to eight moves ahead late in a game and picks the next swipe. **Reaching 2048 is not guaranteed.**
 
 - **Automatic moves** — scores legal moves using empty cells, monotonicity, a snake pattern and more.
   Empty cells are scored by count and by whether they are connected to other free space.
   When the two highest tiles can be joined, it always takes that move.
 - **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX`.
 - **Deeper search** — a per-move node budget, so the search reads 4 to 6 moves ahead.
+  Once four or fewer cells are free it widens the budget four times and reads up to eight moves ahead
+  (the tree is small there, so this costs very little time).
 - **Spawn value forced to 4 (experimental)** — it looks for the game's "chance of a 4" and
   raises it to 1.0. When that does not work it falls back to 2 / 4 on its own
   (see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)).
@@ -26,15 +28,17 @@ It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is 
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
-| Host simulation (2 / 4 spawns) | 8 of 16 runs reached 4096 (mean best tile 2,976) |
-| Host simulation (all spawns are 4) | 3 of 8 runs reached 16,384, four reached 8,192, one 4,096 |
+| Host simulation (2 / 4 spawns, up to v3.5) | 8 of 16 runs reached 4,096 (mean best tile 2,976) |
+| Host simulation (all spawns are 4, v3.9) | 18 of 24 runs reached 8,192 (mean best tile 7,168) |
+| Host simulation (all spawns are 4, v3.9, up to 9,000 moves) | **16,384 on both runs** (318,160 / 323,984) |
 
 v3.5 forces every spawned tile to be a 4, which gains one tier (4,096 in a 2-spawn game is
 worth 8,192 in a 4-spawn game). The tiles on screen still read 2: the game's own arithmetic runs on
 4s, which is why two "2"s merge into an 8. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 The simulation uses very few runs and says nothing about the success rate on a device.
-The deeper search makes each move slower than in v3.3, especially near the end of a game.
+The deeper endgame search makes each move about 2.5 times slower than in v3.8
+(60 to 75 ms per move on the host, longer near the end of a game).
 Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.
 
 ## Download
