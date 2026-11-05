@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-2"
-#define TWEAK_VERSION_OBJC @"v3.9-2"
+#define TWEAK_VERSION "v3.9-3"
+#define TWEAK_VERSION_OBJC @"v3.9-3"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -60,15 +60,15 @@ static const M *findObj, *active, *getGrid, *getSize, *getCell, *swipe, *viewIns
 static BOOL ready = NO, failedInvocation = NO;
 static NSString *initStatus = @"I_START";
 
-// Defined below: copies the console log into Documents/LCAC-2048.log.
-static void startLogTee(void);
+// Defined below: writes one line to Documents/LCAC-2048.log and nowhere else.
+static void logAuto(NSString *format, ...);
 
 #define LOAD(p, n)                                       \
     do {                                                 \
         *(void **)(&(p)) = dlsym(RTLD_DEFAULT, n);       \
         if (!(p)) {                                      \
             initStatus = @"I_API";                       \
-            NSLog(@"[2048-auto] API missing: %s", n);    \
+            logAuto(@"[2048-auto] API missing: %s", n);    \
             return NO;                                   \
         }                                                \
     } while (0)
@@ -95,13 +95,13 @@ static void *call(const M *m, void *obj, void **args) {
     void *r = invoke(m, obj, args, &exc);
     if (exc) {
         failedInvocation = YES;
-        NSLog(@"[2048-auto] managed exception");
+        logAuto(@"[2048-auto] managed exception");
     }
     return r;
 }
 
 static BOOL initEngine(void) {
-    startLogTee();
+    logAuto(@"[2048-auto] tweak " TWEAK_VERSION " starting");
     if (ready) return YES;
 
     LOAD(domain_get, "il2cpp_domain_get");
@@ -157,7 +157,7 @@ static BOOL initEngine(void) {
 
     if (!gmClass || !regularClass || !gridClass || !viewClass || !mode || !obj) {
         initStatus = @"I_CLASS";
-        NSLog(@"[2048-auto] class manager=%p regular=%p grid=%p view=%p mode=%p obj=%p", gmClass, regularClass,
+        logAuto(@"[2048-auto] class manager=%p regular=%p grid=%p view=%p mode=%p obj=%p", gmClass, regularClass,
               gridClass, viewClass, mode, obj);
         return NO;
     }
@@ -192,14 +192,13 @@ static BOOL initEngine(void) {
     if (!gmType || !currentField || !viewGridField || !findObj || !active || !getGrid || !getSize || !getCell ||
         !swipe || !viewInstance || !isMoving) {
         initStatus = @"I_METHOD";
-        NSLog(@"[2048-auto] type=%p fields=%p,%p methods=%p,%p,%p,%p,%p,%p,%p,%p", gmType, currentField,
+        logAuto(@"[2048-auto] type=%p fields=%p,%p methods=%p,%p,%p,%p,%p,%p,%p,%p", gmType, currentField,
               viewGridField, findObj, active, getGrid, getSize, getCell, swipe, viewInstance, isMoving);
         return NO;
     }
 
     // Printed as literal text (not an argument) so that os_log shows it.
-    NSLog(@"[2048-auto] tweak " TWEAK_VERSION ": 2->4 rewrite, game over log");
-    NSLog(@"[2048-auto] IL2CPP ready");
+    logAuto(@"[2048-auto] tweak " TWEAK_VERSION ": 2->4 rewrite, game over log");
     ready = YES;
     return YES;
 }
@@ -208,15 +207,13 @@ typedef struct {
     int32_t x, y;
 } Vec2;
 
-// --- console log to a file -------------------------------------------------
-// The app has nowhere to read NSLog output, so stderr is pumped through a pipe
-// and copied to Documents/LCAC-2048.log (and to the original stderr, so a
-// connected console still shows everything). Milestone records are written the
-// same way, which keeps them in one file with the rest of the run.
-static int logFileFd = -1;
-static int logConsoleFd = -1;
-static int logPipeRead = -1;
-static int logTeeStarted;
+// --- run log ---------------------------------------------------------------
+// Only the tweak's own lines are kept, and only in Documents/LCAC-2048.log:
+// nothing is printed to the console. The app's own chatter (ads, analytics
+// retries every few seconds) used to fill the file, so NSLog is not used at
+// all; every line goes through logAuto below.
+static int logFileFd = -2; // -2: not opened yet, -1: could not open
+static NSString *logPath;
 
 static NSString *documentsPath(NSString *name) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -224,41 +221,32 @@ static NSString *documentsPath(NSString *name) {
     return [[paths objectAtIndex:0] stringByAppendingPathComponent:name];
 }
 
-static void *logPump(void *arg) {
-    (void)arg;
-    char buf[4096];
-    for (;;) {
-        ssize_t n = read(logPipeRead, buf, sizeof(buf));
-        if (n <= 0) break;
-        if (logFileFd >= 0) (void)!write(logFileFd, buf, (size_t)n);
-        if (logConsoleFd >= 0) (void)!write(logConsoleFd, buf, (size_t)n);
-    }
-    return NULL;
+static void logOpenFile(void) {
+    logPath = documentsPath(@"LCAC-2048.log");
+    if (!logPath) return;
+    NSFileManager *files = [NSFileManager defaultManager];
+    NSDictionary *attrs = [files attributesOfItemAtPath:logPath error:NULL];
+    // Only our own lines go in, so it stays small; start over past 1 MB.
+    if ([[attrs objectForKey:NSFileSize] unsignedLongLongValue] > 1ull * 1024 * 1024)
+        [files removeItemAtPath:logPath error:NULL];
+    logFileFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
-static void startLogTee(void) {
-    if (logTeeStarted) return;
-    logTeeStarted = 1;
-    NSString *path = documentsPath(@"LCAC-2048.log");
-    if (!path) return;
-    NSFileManager *files = [NSFileManager defaultManager];
-    NSDictionary *attrs = [files attributesOfItemAtPath:path error:NULL];
-    // Keep the file from growing forever: start over past 4 MB.
-    if ([[attrs objectForKey:NSFileSize] unsignedLongLongValue] > 4ull * 1024 * 1024) [files removeItemAtPath:path error:NULL];
-    logFileFd = open([path fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (logFileFd < 0) return;
-    int fds[2];
-    if (pipe(fds) != 0) {
-        close(logFileFd);
-        logFileFd = -1;
-        return;
+static void logAuto(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *body = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    static NSDateFormatter *stamp;
+    if (!stamp) {
+        stamp = [[NSDateFormatter alloc] init];
+        [stamp setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
     }
-    logConsoleFd = dup(STDERR_FILENO);
-    logPipeRead = fds[0];
-    dup2(fds[1], STDERR_FILENO);
-    close(fds[1]);
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, logPump, NULL) == 0) pthread_detach(thread);
+    NSString *text = [NSString stringWithFormat:@"%@ %@\n", [stamp stringFromDate:[NSDate date]], body];
+    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    if (logFileFd == -2) logOpenFile();
+    if (logFileFd < 0) return;
+    (void)!write(logFileFd, [data bytes], [data length]);
 }
 
 // --- experimental: force every new tile to be a 4 ---------------------------
@@ -405,7 +393,7 @@ static void dumpNames(C *c, int tag) {
     while ((m = class_methods(c, &it))) {
         unsigned long long e[2];
         encName(method_name(m), e);
-        if (diagEnabled) NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
+        if (diagEnabled) logAuto(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
     }
 }
 
@@ -426,7 +414,7 @@ static BOOL containsWord(const char *n, const char *key) {
 
 static void logBoard(int tag, const int32_t *b) {
     if (!diagEnabled) return;
-    NSLog(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
+    logAuto(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
           b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
 }
 
@@ -462,7 +450,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
         if (!tn || strcmp(tn, "System.Single")) continue;
         float v = 0;
         field_value(target, (F *)f, &v);
-        if (diagEnabled && containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
+        if (diagEnabled && containsFour(n)) logAuto(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
         if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
             fourField = (F *)f;
             fourOwner = owner;
@@ -471,7 +459,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
                 float one = 1.0f;
                 field_set(target, (F *)f, &one);
             }
-            NSLog(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
+            logAuto(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
         }
     }
 }
@@ -603,7 +591,7 @@ static void logFrame(const char *tag) {
     if (!fc) return;
     void *box = call(fc, NULL, NULL);
     if (failedInvocation || !box) return;
-    NSLog(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
+    logAuto(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
 }
 
 // The game over screen has a name of its own after all:
@@ -676,7 +664,7 @@ static void showHudBeside(void *loseScreen, const char *loseName) {
             void *p2[] = {&on};
             call(setActive, sgo, p2);
         }
-        NSLog(@"[2048-auto] hud shown");
+        logAuto(@"[2048-auto] hud shown");
     }
 }
 
@@ -702,7 +690,7 @@ static void hideLoseScreen(BOOL verbose) {
         if (verbose) {
             unsigned long long c[3] = {0, 0, 0};
             encManagedName(nm, c);
-            NSLog(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
+            logAuto(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
         }
         uint8_t off = 0;
         void *p[] = {&off};
@@ -710,7 +698,7 @@ static void hideLoseScreen(BOOL verbose) {
         hidden++;
         showHudBeside(go, plain);
     }
-    if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
+    if (hidden || verbose) logAuto(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
 }
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
@@ -767,7 +755,7 @@ static void findRestart(void *game) {
                 encName3(n, e);
                 const void *rt = method_ret ? method_ret(m) : NULL;
                 if (rt && type_get_name) encName3(type_get_name(rt), r);
-                NSLog(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
+                logAuto(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
                       e[0], e[1], e[2], r[0], r[1], r[2]);
                 if (restartCount < 8) {
                     restartList[restartCount] = m;
@@ -788,8 +776,7 @@ static long long moveCount;
 static int bestTile;
 
 static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
-    // Numbers only: os_log masks strings that are passed as arguments.
-    NSLog(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
+    logAuto(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
            "%d,%d,%d,%d",
           tile, score, moves, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
           b[13], b[14], b[15]);
@@ -853,7 +840,7 @@ static void noteGameOver(const int32_t *board, void *mgr, void *game) {
     if (gameOverLogged) return;
     gameOverLogged = 1;
     saveGameOver(board, readScore(mgr, game));
-    NSLog(@"[2048-auto] game over: board saved");
+    logAuto(@"[2048-auto] game over: board saved");
 }
 
 // Called when the game has already stopped taking input: the board is still
@@ -888,7 +875,7 @@ static void probeDraw(void *grid) {
             if (cells && !failedInvocation) {
                 C *ac = object_class(cells);
                 C *ec = (ac && class_element) ? (C *)class_element(ac) : NULL;
-                NSLog(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
+                logAuto(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
                       (unsigned long long)(uintptr_t)ec);
                 dumpNames(ec, 4);
             }
@@ -906,7 +893,7 @@ static void probeDraw(void *grid) {
                 break;
             }
     }
-    if (viewRefresh && diagEnabled) NSLog(@"[2048-auto] view redraw found");
+    if (viewRefresh && diagEnabled) logAuto(@"[2048-auto] view redraw found");
 }
 
 static void probeSpawn(void *mgr, void *grid) {
@@ -916,7 +903,7 @@ static void probeSpawn(void *mgr, void *grid) {
     probeFields(gridClass, grid, FIELD_GRID, "Grid");
     if (!fourOwner) {
         setCellMethod = findSetter();
-        if (diagEnabled) NSLog(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
+        if (diagEnabled) logAuto(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
               (unsigned long long)(uintptr_t)grid, (unsigned long long)(uintptr_t)setCellMethod);
         // Prove the setter by writing a cell's own value back before using it.
         BOOL saved = failedInvocation;
@@ -935,10 +922,10 @@ static void probeSpawn(void *mgr, void *grid) {
         if (ok) {
             converting = 1;
             solver_set_spawn_value(4);
-            NSLog(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
+            logAuto(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
             probeDraw(grid);
         } else {
-            NSLog(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
+            logAuto(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
         }
     }
 }
@@ -953,7 +940,7 @@ static void revertFour(void *mgr, void *grid) {
     }
     fourOwner = FIELD_NONE;
     solver_set_spawn_value(0);
-    NSLog(@"[2048-auto] a 2 spawned after forcing; reverting to 2/4");
+    logAuto(@"[2048-auto] a 2 spawned after forcing; reverting to 2/4");
 }
 
 // Returns status for UI; all calls occur on Unity's main thread. Unsupported modes do nothing.
@@ -981,7 +968,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         if (!gameOverLogged && ++pauseStreak >= 12) {
             pauseStreak = 0;
             gameOverLogged = 1;
-            NSLog(@"[2048-auto] game stuck; asking for a restart");
+            logAuto(@"[2048-auto] game stuck; asking for a restart");
         }
         return @"PAUSE";
     }
@@ -1034,7 +1021,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             } else {
                 converting = 0;
                 solver_set_spawn_value(0);
-                NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
+                logAuto(@"[2048-auto] grid write failed; spawns stay 2/4");
             }
         }
         if (rewritten && viewRefresh) {
@@ -1042,7 +1029,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (view && !failedInvocation) call(viewRefresh, view, NULL);
             if (!refreshLogged) {
                 refreshLogged = 1;
-                if (diagEnabled) NSLog(@"[2048-auto] view redraw called");
+                if (diagEnabled) logAuto(@"[2048-auto] view redraw called");
             }
         }
     }
@@ -1060,10 +1047,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         int tiles = 0;
         for (int i = 0; i < 16; i++)
             if (board[i]) tiles++;
-        NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        logAuto(@"[2048-auto] restart took effect: %d tiles", tiles);
         if (restartGood < 0) {
             restartGood = restartSlot;
-            NSLog(@"[2048-auto] restart entry %d kept", restartGood + 1);
+            logAuto(@"[2048-auto] restart entry %d kept", restartGood + 1);
         }
         void *view = call(viewInstance, NULL, NULL);
         if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
@@ -1101,7 +1088,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
             else if (out->board[at] == 4 && ++fourSpawns == 20)
-                NSLog(@"[2048-auto] 20 spawns, all 4s: forcing works");
+                logAuto(@"[2048-auto] 20 spawns, all 4s: forcing works");
         }
     }
 
@@ -1129,7 +1116,7 @@ NSString *Auto2048Restart(void) {
     if (failedInvocation) return @"NO";
     findRestart(game);
     if (!restartCount) {
-        NSLog(@"[2048-auto] restart method not found");
+        logAuto(@"[2048-auto] restart method not found");
         return @"NO";
     }
     int slot = restartGood >= 0 ? restartGood : (restartIndex++ % restartCount);
@@ -1147,9 +1134,9 @@ NSString *Auto2048Restart(void) {
             if (sc) {
                 void *par[] = {ret};
                 call(sc, mgr, par);
-                NSLog(@"[2048-auto] restart: coroutine started");
+                logAuto(@"[2048-auto] restart: coroutine started");
             } else {
-                NSLog(@"[2048-auto] restart: coroutine not startable");
+                logAuto(@"[2048-auto] restart: coroutine not startable");
             }
         }
     }
@@ -1157,7 +1144,7 @@ NSString *Auto2048Restart(void) {
     // The next game over is a different game, so allow it to be written out.
     gameOverLogged = 0;
     haveExpected = NO;
-    NSLog(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
+    logAuto(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
     return @"ON";
 }
 

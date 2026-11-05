@@ -94,9 +94,9 @@ inside the app's container. One block per game, with the **dylib version, time, 
 
 ### Run log
 
-**Everything printed to the console is also written to `Documents/LCAC-2048.log`**
-(the `[2048-auto] ...` lines; the file is started over once it passes 4 MB), so one file is enough
-to investigate a problem. When a 2,048 / 4,096 / 8,192 tile is built, a single line records the
+The `[2048-auto] ...` lines go **only to `Documents/LCAC-2048.log`** (nothing is printed to the
+console; the file is started over once it passes 1 MB). The app's own logging (ads, analytics) is
+left out, so this one file is enough to investigate a problem. When a 2,048 / 4,096 / 8,192 tile is built, a single line records the
 score, the move count and the board at that moment:
 
 ```
