@@ -114,7 +114,7 @@ static void logVersionOnce(void) {
 static BOOL initEngine(void) {
     logVersionOnce();
     if (ready) return YES;
-    if (initStatus != @"I_START" && initStatus != @"I_UNITY") return NO;
+    if (![initStatus isEqualToString:@"I_START"] && ![initStatus isEqualToString:@"I_UNITY"]) return NO;
 
     LOAD(domain_get, "il2cpp_domain_get");
     LOAD(assemblies, "il2cpp_domain_get_assemblies");
