@@ -17,7 +17,7 @@ int main(int argc,char **argv){int games=argc>1?atoi(argv[1]):3;int maxmoves=arg
    spawn(b);step++;
    /* 実機の実行ログと同じ形: 2048 以上のタイルが増えた時点を残す */
    {int m=0;for(int i=0;i<16;i++)if(b[i]>m)m=b[i];
-    if(m>best){best=m;if(m>=2048&&!(m&(m-1)))printf("  milestone tile=%d score=%ld moves=%d\n",m,score,step);}}}
+    if(m>best){best=m;if(m>=2048&&!(m&(m-1)))printf("  milestone tile=%d score=%ld moves=%d\n",m,score,step);fflush(stdout);}}}
   int max=0;for(int i=0;i<16;i++)if(b[i]>max)max=b[i];printf("seed %d max=%d score=%ld moves=%d cpu=%.2fs%s\n",g,max,score,step,(double)(clock()-start)/CLOCKS_PER_SEC,step==maxmoves?" capped":"");fflush(stdout);
  }
 }
