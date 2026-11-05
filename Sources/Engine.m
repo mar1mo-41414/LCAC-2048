@@ -2,13 +2,16 @@
 #import <dlfcn.h>
 #import "Solver.h"
 #import "Engine.h"
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9"
-#define TWEAK_VERSION_OBJC @"v3.9"
+#define TWEAK_VERSION "v3.9-1"
+#define TWEAK_VERSION_OBJC @"v3.9-1"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -57,6 +60,9 @@ static const M *findObj, *active, *getGrid, *getSize, *getCell, *swipe, *viewIns
 static BOOL ready = NO, failedInvocation = NO;
 static NSString *initStatus = @"I_START";
 
+// Defined below: copies the console log into Documents/LCAC-2048.log.
+static void startLogTee(void);
+
 #define LOAD(p, n)                                       \
     do {                                                 \
         *(void **)(&(p)) = dlsym(RTLD_DEFAULT, n);       \
@@ -95,6 +101,7 @@ static void *call(const M *m, void *obj, void **args) {
 }
 
 static BOOL initEngine(void) {
+    startLogTee();
     if (ready) return YES;
 
     LOAD(domain_get, "il2cpp_domain_get");
@@ -200,6 +207,59 @@ static BOOL initEngine(void) {
 typedef struct {
     int32_t x, y;
 } Vec2;
+
+// --- console log to a file -------------------------------------------------
+// The app has nowhere to read NSLog output, so stderr is pumped through a pipe
+// and copied to Documents/LCAC-2048.log (and to the original stderr, so a
+// connected console still shows everything). Milestone records are written the
+// same way, which keeps them in one file with the rest of the run.
+static int logFileFd = -1;
+static int logConsoleFd = -1;
+static int logPipeRead = -1;
+static int logTeeStarted;
+
+static NSString *documentsPath(NSString *name) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if ([paths count] == 0) return nil;
+    return [[paths objectAtIndex:0] stringByAppendingPathComponent:name];
+}
+
+static void *logPump(void *arg) {
+    (void)arg;
+    char buf[4096];
+    for (;;) {
+        ssize_t n = read(logPipeRead, buf, sizeof(buf));
+        if (n <= 0) break;
+        if (logFileFd >= 0) (void)!write(logFileFd, buf, (size_t)n);
+        if (logConsoleFd >= 0) (void)!write(logConsoleFd, buf, (size_t)n);
+    }
+    return NULL;
+}
+
+static void startLogTee(void) {
+    if (logTeeStarted) return;
+    logTeeStarted = 1;
+    NSString *path = documentsPath(@"LCAC-2048.log");
+    if (!path) return;
+    NSFileManager *files = [NSFileManager defaultManager];
+    NSDictionary *attrs = [files attributesOfItemAtPath:path error:NULL];
+    // Keep the file from growing forever: start over past 4 MB.
+    if ([[attrs objectForKey:NSFileSize] unsignedLongLongValue] > 4ull * 1024 * 1024) [files removeItemAtPath:path error:NULL];
+    logFileFd = open([path fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (logFileFd < 0) return;
+    int fds[2];
+    if (pipe(fds) != 0) {
+        close(logFileFd);
+        logFileFd = -1;
+        return;
+    }
+    logConsoleFd = dup(STDERR_FILENO);
+    logPipeRead = fds[0];
+    dup2(fds[1], STDERR_FILENO);
+    close(fds[1]);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, logPump, NULL) == 0) pthread_detach(thread);
+}
 
 // --- experimental: force every new tile to be a 4 ---------------------------
 // The game keeps the odds of a 4 somewhere. If a float field of GameManager or
@@ -720,6 +780,44 @@ static void findRestart(void *game) {
     }
 }
 
+// --- progress: how many moves were played, and when a big tile appeared -----
+// One move is one swipe the tweak actually sent. The counter resets when a new
+// game starts (a different Grid, or a board that is back to two tiles).
+static void *trackedGrid;
+static long long moveCount;
+static int bestTile;
+static int milestoneLogged;
+
+static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
+    // Numbers only: os_log masks strings that are passed as arguments.
+    NSLog(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
+           "%d,%d,%d,%d",
+          tile, score, moves, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
+          b[13], b[14], b[15]);
+}
+
+// Called on every read, so it must stay cheap: the board is already in memory
+// and the score is only read when a new tile shows up.
+static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
+    int tiles = 0, max = 0;
+    for (int i = 0; i < 16; i++) {
+        if (b[i]) tiles++;
+        if (b[i] > max) max = b[i];
+    }
+    if (grid != trackedGrid || (tiles <= 2 && moveCount > 0)) {
+        trackedGrid = grid;
+        moveCount = 0;
+        bestTile = 0;
+        milestoneLogged = 0;
+    }
+    if (max <= bestTile) return;
+    bestTile = max;
+    // 2048 以上で、2 の累乗のタイルが増えたときだけ記録する。
+    if (max < 2048 || (max & (max - 1)) != 0) return;
+    logMilestone(b, readScore(mgr, game), moveCount, max);
+    milestoneLogged = 1;
+}
+
 static void saveGameOver(const int32_t *b, long long score) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     if ([paths count] == 0) return;
@@ -733,7 +831,7 @@ static void saveGameOver(const int32_t *b, long long score) {
     // written here is the bottom row of the board. tools/board_image.py turns
     // the block back into a picture and flips it to match the screen.
     NSMutableString *text = [NSMutableString string];
-    [text appendFormat:@"%@ %@ score=%lld\n", when, TWEAK_VERSION_OBJC, score];
+    [text appendFormat:@"%@ %@ score=%lld moves=%lld\n", when, TWEAK_VERSION_OBJC, score, moveCount];
     for (int y = 0; y < 4; y++)
         [text appendFormat:@"%6d %6d %6d %6d\n", b[4 * y], b[4 * y + 1], b[4 * y + 2], b[4 * y + 3]];
     [text appendString:@"\n"];
@@ -951,6 +1049,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     }
     pauseStreak = 0;
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    trackProgress(grid, board, mgr, game);
     // The game may put the panel back a frame later, so sweep a couple of times.
     if (overlayHidesLeft > 0) {
         overlayHidesLeft--;
@@ -1085,5 +1184,7 @@ NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {
     call(swipe, (void *)now.manager, par);
     memcpy(expected, after, sizeof(expected));
     haveExpected = YES;
-    return failedInvocation ? @"ERR" : @"ON";
+    if (failedInvocation) return @"ERR";
+    moveCount++;
+    return @"ON";
 }

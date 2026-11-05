@@ -96,11 +96,12 @@ BOARD_H = 4 * CELL + 5 * GAP
 class Block:
     """ゲームオーバー 1 回分。"""
 
-    def __init__(self, time_text: str, version: str, score, rows):
+    def __init__(self, time_text: str, version: str, score, rows, moves=None):
         self.time_text = time_text
         self.version = version
         self.score = score
         self.rows = rows
+        self.moves = moves
 
     @property
     def max_tile(self) -> int:
@@ -113,10 +114,15 @@ class Block:
     def summary(self, spawn2: bool = False) -> str:
         top = 2 if (spawn2 and self.max_tile == 4) else self.max_tile
         score = "?" if self.score is None else f"{self.score:,}"
-        return f"{self.time_text} {self.version} スコア {score} 最大タイル {top}"
+        line = f"{self.time_text} {self.version} スコア {score} 最大タイル {top}"
+        if self.moves is not None:
+            line += f" 手数 {self.moves:,}"
+        return line
 
 
-HEADER_RE = re.compile(r"^(?P<time>.*?)\s+(?P<version>v[\w.\-]+)\s+score=(?P<score>-?\d+)\s*$")
+HEADER_RE = re.compile(
+    r"^(?P<time>.*?)\s+(?P<version>v[\w.\-]+)\s+score=(?P<score>-?\d+)(?:\s+moves=(?P<moves>\d+))?\s*$"
+)
 
 
 def parse_blocks(text: str) -> list[Block]:
@@ -131,12 +137,19 @@ def parse_blocks(text: str) -> list[Block]:
             # 時刻の書式が変わっていても、版とスコアだけ拾えれば描ける。
             version = re.search(r"\bv[\w.\-]+", lines[0])
             score = re.search(r"score=(-?\d+)", lines[0])
+            moves = re.search(r"moves=(\d+)", lines[0])
             time_text = lines[0].split(version.group(0))[0].strip() if version else lines[0].strip()
             if not score:
                 continue
-            header = (time_text, version.group(0) if version else "?", int(score.group(1)))
+            header = (
+                time_text,
+                version.group(0) if version else "?",
+                int(score.group(1)),
+                int(moves.group(1)) if moves else None,
+            )
         else:
-            header = (m.group("time").strip(), m.group("version"), int(m.group("score")))
+            header = (m.group("time").strip(), m.group("version"), int(m.group("score")),
+                      int(m.group("moves")) if m.group("moves") else None)
 
         rows = []
         for line in lines[1:]:
@@ -150,7 +163,7 @@ def parse_blocks(text: str) -> list[Block]:
             continue
         while len(rows) < 4:  # 書き込み途中で切れたブロック
             rows.append([0, 0, 0, 0])
-        blocks.append(Block(header[0], header[1], header[2], rows))
+        blocks.append(Block(header[0], header[1], header[2], rows, header[3]))
     return blocks
 
 
@@ -185,9 +198,10 @@ def caption_lines(block: Block, spawn2: bool) -> list[str]:
     score = "?" if block.score is None else f"{block.score:,}"
     top = 2 if (spawn2 and block.max_tile == 4) else block.max_tile
     note = "as shown (4 -> 2)" if spawn2 else "board values"
+    moves = f"moves {block.moves:,}    " if block.moves is not None else ""
     return [
         f"{block.version}   {display_time(block.time_text)}",
-        f"score {score}    max tile {top:,}    empty {block.empties}    ({note})",
+        f"score {score}    max tile {top:,}    {moves}empty {block.empties}    ({note})",
     ]
 
 

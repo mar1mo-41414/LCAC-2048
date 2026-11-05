@@ -76,19 +76,34 @@ The game and its IPA are not included.
 ### Game-over log
 
 When the game is over, the final board is appended to `Documents/LCAC-2048_over.log`
-inside the app's container. One block per game, with the **dylib version, time, score and board**.
+inside the app's container. One block per game, with the **dylib version, time, score, moves and board**.
 
 ```
-2026-11-04 21:15:03 +0900 v3.6 score=146544
-  4096   8192   1024    256
-    32     64      8      4
-   256    512    256     64
-     4   1024   8192   4096
+2026-11-05 15:56:23 +0900 v3.9-1 score=75344 moves=3821
+  2048    512    128      4
+   256   1024   2048   4096
+    32    128    512    256
+     4      8     64     32
 ```
 
+- `moves=` is the number of swipes sent in that game; it starts again at 0 after a retry.
 - Values are the real ones; a tile the screen draws as 2 is recorded as 4 once rewritten.
+- **The first row written is the bottom row of the screen** (the game counts y from the bottom).
 - If the score cannot be read the line shows `score=-1`; the board is still written.
 - The file is appended to, so previous games stay in it.
+
+### Run log
+
+**Everything printed to the console is also written to `Documents/LCAC-2048.log`**
+(the `[2048-auto] ...` lines; the file is started over once it passes 4 MB), so one file is enough
+to investigate a problem. When a 2,048 / 4,096 / 8,192 tile is built, a single line records the
+score, the move count and the board at that moment:
+
+```
+[2048-auto] milestone tile=8192 score=147528 moves=3210 board 16,4,128,8192 | 8,64,256,4096 | ...
+```
+
+The `board` order matches the game-over log (first row is the bottom of the screen).
 
 ### When it does not work
 
