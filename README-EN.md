@@ -24,7 +24,7 @@ It searches up to eight moves ahead late in a game and picks the next swipe. **R
 
 | Item | State |
 | --- | --- |
-| Real device (LiveContainer) | Auto-play confirmed with v3.5; **8,192 reached** (2026-11-03), 4,096 several times |
+| Real device (LiveContainer) | Auto-play confirmed with v3.5; **16,384 reached** (2026-11-06, v3.9-8, 218,856 / 4,800 moves), 8,192 several times |
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
@@ -35,6 +35,10 @@ It searches up to eight moves ahead late in a game and picks the next swipe. **R
 v3.5 forces every spawned tile to be a 4, which gains one tier (4,096 in a 2-spawn game is
 worth 8,192 in a 4-spawn game). The tiles on screen still read 2: the game's own arithmetic runs on
 4s, which is why two "2"s merge into an 8. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+On a device the 16,384 came from one run of v3.9-8 (reached at move 4,633 and lost 170 moves
+later); the previous best was 186,960 with an 8,192 tile (v3.9-3). Typical move counts are about
+550 for 2,048, 1,050 for 4,096, 2,100 for 8,192 and 4,600 for 16,384.
 
 The simulation uses very few runs and says nothing about the success rate on a device.
 The deeper endgame search makes each move about 2.5 times slower than in v3.8
