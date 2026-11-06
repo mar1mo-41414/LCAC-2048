@@ -73,6 +73,16 @@ int solver_move(const int32_t *in, int dir, int32_t *out) {
 #ifndef ENDGAME_EMPTY
 #define ENDGAME_EMPTY 4 // free cells at which the wider endgame search starts
 #endif
+// 8,192 を作ったあとの探索を広げる倍率。端末は 1 手 0.14 秒のうち 0.06 秒しか
+// 使っていないので、大きいタイルができてから余っている時間を使う。1 = 無効。
+#ifndef BIG_TILE_BUDGET_MULT
+#define BIG_TILE_BUDGET_MULT 1
+#endif
+// log2 でのしきい値。13 = 8,192。
+#ifndef BIG_TILE_FROM
+#define BIG_TILE_FROM 13
+#endif
+
 #ifndef ENDGAME_BUDGET_MULT
 #define ENDGAME_BUDGET_MULT 4
 #endif
@@ -372,6 +382,10 @@ int solver_best(const int32_t *in) {
     int maxDepth = MAX_DEPTH;
     if (ENDGAME_EMPTY > 0 && empty <= ENDGAME_EMPTY) {
         budget *= ENDGAME_BUDGET_MULT;
+        if (ENDGAME_MAX_DEPTH > maxDepth) maxDepth = ENDGAME_MAX_DEPTH;
+    }
+    if (BIG_TILE_BUDGET_MULT > 1 && highest >= BIG_TILE_FROM) {
+        budget *= BIG_TILE_BUDGET_MULT;
         if (ENDGAME_MAX_DEPTH > maxDepth) maxDepth = ENDGAME_MAX_DEPTH;
     }
 
