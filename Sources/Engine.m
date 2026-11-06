@@ -10,8 +10,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9-8"
-#define TWEAK_VERSION_OBJC @"v3.9-8"
+#define TWEAK_VERSION "v3.9"
+#define TWEAK_VERSION_OBJC @"v3.9"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
