@@ -4,13 +4,15 @@
 
 A tweak (dylib) that plays the regular mode of **2048** (`com.ketchapp.2048`) on
 [LiveContainer](https://github.com/LiveContainer/LiveContainer).
-It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is not guaranteed.**
+It searches up to eight moves ahead late in a game and picks the next swipe. **Reaching 2048 is not guaranteed.**
 
 - **Automatic moves** — scores legal moves using empty cells, monotonicity, a snake pattern and more.
   Empty cells are scored by count and by whether they are connected to other free space.
   When the two highest tiles can be joined, it always takes that move.
-- **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX`.
+- **Adjustable speed** — long-press the button to cycle through `x1` / `x2` / `x4` / `MAX` (`MAX` has no wait; only the search and the tile animation take time).
 - **Deeper search** — a per-move node budget, so the search reads 4 to 6 moves ahead.
+  Once four or fewer cells are free it widens the budget four times and reads up to eight moves ahead
+  (the tree is small there, so this costs very little time).
 - **Spawn value forced to 4 (experimental)** — it looks for the game's "chance of a 4" and
   raises it to 1.0. When that does not work it falls back to 2 / 4 on its own
   (see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)).
@@ -22,19 +24,25 @@ It searches up to four moves ahead and picks the next swipe. **Reaching 2048 is 
 
 | Item | State |
 | --- | --- |
-| Real device (LiveContainer) | Auto-play confirmed with v3.5; **8,192 reached** (2026-11-03), 4,096 several times |
+| Real device (LiveContainer) | Auto-play confirmed with v3.5; **16,384 reached** (2026-11-06, v3.9, 218,856 / 4,800 moves), 8,192 several times |
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |
-| Host simulation (2 / 4 spawns) | 8 of 16 runs reached 4096 (mean best tile 2,976) |
-| Host simulation (all spawns are 4) | 3 of 8 runs reached 16,384, four reached 8,192, one 4,096 |
+| Host simulation (2 / 4 spawns, up to v3.5) | 8 of 16 runs reached 4,096 (mean best tile 2,976) |
+| Host simulation (all spawns are 4, v3.9) | 18 of 24 runs reached 8,192 (mean best tile 7,168) |
+| Host simulation (all spawns are 4, v3.9, up to 9,000 moves) | **16,384 on both runs** (318,160 / 323,984) |
 
 v3.5 forces every spawned tile to be a 4, which gains one tier (4,096 in a 2-spawn game is
 worth 8,192 in a 4-spawn game). The tiles on screen still read 2: the game's own arithmetic runs on
 4s, which is why two "2"s merge into an 8. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
+On a device the 16,384 came from one run of v3.9 (reached at move 4,633 and lost 170 moves
+later); the previous best was 186,960 with an 8,192 tile (v3.9-3). Typical move counts are about
+550 for 2,048, 1,050 for 4,096, 2,100 for 8,192 and 4,600 for 16,384.
+
 The simulation uses very few runs and says nothing about the success rate on a device.
-The deeper search makes each move slower than in v3.3, especially near the end of a game.
+The deeper endgame search makes each move about 2.5 times slower than in v3.8
+(60 to 75 ms per move on the host, longer near the end of a game).
 Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.
 
 ## Download
@@ -72,19 +80,34 @@ The game and its IPA are not included.
 ### Game-over log
 
 When the game is over, the final board is appended to `Documents/LCAC-2048_over.log`
-inside the app's container. One block per game, with the **dylib version, time, score and board**.
+inside the app's container. One block per game, with the **dylib version, time, score, moves and board**.
 
 ```
-2026-11-04 21:15:03 +0900 v3.6 score=146544
-  4096   8192   1024    256
-    32     64      8      4
-   256    512    256     64
-     4   1024   8192   4096
+2026-11-05 15:56:23 +0900 v3.9-1 score=75344 moves=3821
+  2048    512    128      4
+   256   1024   2048   4096
+    32    128    512    256
+     4      8     64     32
 ```
 
+- `moves=` is the number of swipes sent in that game; it starts again at 0 after a retry.
 - Values are the real ones; a tile the screen draws as 2 is recorded as 4 once rewritten.
+- **The first row written is the bottom row of the screen** (the game counts y from the bottom).
 - If the score cannot be read the line shows `score=-1`; the board is still written.
 - The file is appended to, so previous games stay in it.
+
+### Run log
+
+The `[2048-auto] ...` lines go **only to `Documents/LCAC-2048.log`** (nothing is printed to the
+console; the file is started over once it passes 1 MB). The app's own logging (ads, analytics) is
+left out, so this one file is enough to investigate a problem. When a 2,048 / 4,096 / 8,192 tile is built, a single line records the
+score, the move count and the board at that moment:
+
+```
+[2048-auto] milestone tile=8192 score=147528 moves=3210 board 16,4,128,8192 | 8,64,256,4096 | ...
+```
+
+The `board` order matches the game-over log (first row is the bottom of the screen).
 
 ### When it does not work
 
@@ -125,6 +148,30 @@ make simulate    # quick simulation (3 games × 5,000 moves; takes a few minutes
 
 The same checks run in GitHub Actions (`.github/workflows/tests.yml`).
 `Engine.m` / `Controller.m` need the iOS SDK and a device, so CI does not build them.
+
+## Turning a score log block into a board image
+
+`tools/board_image.py` draws one game from `Documents/LCAC-2048_over.log` as an image
+that looks like the game itself, score included.
+
+```bash
+python3 tools/board_image.py LCAC-2048_over.log --list      # list the recorded games
+python3 tools/board_image.py LCAC-2048_over.log             # the last game as PNG
+python3 tools/board_image.py LCAC-2048_over.log --block 12  # the 12th game
+pbpaste | python3 tools/board_image.py -                    # pass a single block
+```
+
+- PNG output needs Pillow (`pip install pillow`); without it the script writes SVG, which
+  opens in any browser or Quick Look (`--format svg` forces it).
+- **Board orientation**: the log stores rows in the game's own order (row 1 is the bottom row on
+  screen), so the image flips them to match the screen. Use `--raw-order` for the log's order.
+- Numbers are the log's own values (the game's internal values). Add `--spawn2` to match the
+  screen, which renders **only a freshly spawned 4 as "2"** (the forced-4 builds rewrite the cell
+  to 4 without redrawing it). Every other tile reads the same on screen and in the log.
+- `--scale 2` for a larger image, `--out FILE` to choose the output path.
+- Colours are **sampled from real screenshots of the game itself (`com.ketchapp.2048` 4.0.8)**:
+  tiles, board frame, empty cells and background. 16,384 and above are not sampled yet
+  and are drawn in dark grey.
 
 ## Documentation
 

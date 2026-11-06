@@ -2,13 +2,16 @@
 #import <dlfcn.h>
 #import "Solver.h"
 #import "Engine.h"
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.19-1"
-#define TWEAK_VERSION_OBJC @"v3.19-1"
+#define TWEAK_VERSION "v3.9"
+#define TWEAK_VERSION_OBJC @"v3.9"
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -57,12 +60,15 @@ static const M *findObj, *active, *getGrid, *getSize, *getCell, *swipe, *viewIns
 static BOOL ready = NO, failedInvocation = NO;
 static NSString *initStatus = @"I_START";
 
+// Defined below: writes one line to Documents/LCAC-2048.log and nowhere else.
+static void logAuto(NSString *format, ...);
+
 #define LOAD(p, n)                                       \
     do {                                                 \
         *(void **)(&(p)) = dlsym(RTLD_DEFAULT, n);       \
         if (!(p)) {                                      \
             initStatus = @"I_API";                       \
-            NSLog(@"[2048-auto] API missing: %s", n);    \
+            logAuto(@"[2048-auto] API missing: %s", n);    \
             return NO;                                   \
         }                                                \
     } while (0)
@@ -89,13 +95,26 @@ static void *call(const M *m, void *obj, void **args) {
     void *r = invoke(m, obj, args, &exc);
     if (exc) {
         failedInvocation = YES;
-        NSLog(@"[2048-auto] managed exception");
+        logAuto(@"[2048-auto] managed exception");
     }
     return r;
 }
 
+// initEngine runs on every read (frame), so anything logged from it must be
+// once-only. It also has to appear even when the setup below fails.
+static void logVersionOnce(void) {
+    static int done;
+    if (done) return;
+    done = 1;
+    logAuto(@"[2048-auto] tweak " TWEAK_VERSION " starting");
+}
+
+// I_UNITY is transient (the IL2CPP domain comes up late), the rest are final:
+// retrying them every frame only floods the log.
 static BOOL initEngine(void) {
+    logVersionOnce();
     if (ready) return YES;
+    if (![initStatus isEqualToString:@"I_START"] && ![initStatus isEqualToString:@"I_UNITY"]) return NO;
 
     LOAD(domain_get, "il2cpp_domain_get");
     LOAD(assemblies, "il2cpp_domain_get_assemblies");
@@ -150,7 +169,7 @@ static BOOL initEngine(void) {
 
     if (!gmClass || !regularClass || !gridClass || !viewClass || !mode || !obj) {
         initStatus = @"I_CLASS";
-        NSLog(@"[2048-auto] class manager=%p regular=%p grid=%p view=%p mode=%p obj=%p", gmClass, regularClass,
+        logAuto(@"[2048-auto] class manager=%p regular=%p grid=%p view=%p mode=%p obj=%p", gmClass, regularClass,
               gridClass, viewClass, mode, obj);
         return NO;
     }
@@ -185,14 +204,13 @@ static BOOL initEngine(void) {
     if (!gmType || !currentField || !viewGridField || !findObj || !active || !getGrid || !getSize || !getCell ||
         !swipe || !viewInstance || !isMoving) {
         initStatus = @"I_METHOD";
-        NSLog(@"[2048-auto] type=%p fields=%p,%p methods=%p,%p,%p,%p,%p,%p,%p,%p", gmType, currentField,
+        logAuto(@"[2048-auto] type=%p fields=%p,%p methods=%p,%p,%p,%p,%p,%p,%p,%p", gmType, currentField,
               viewGridField, findObj, active, getGrid, getSize, getCell, swipe, viewInstance, isMoving);
         return NO;
     }
 
     // Printed as literal text (not an argument) so that os_log shows it.
-    NSLog(@"[2048-auto] tweak " TWEAK_VERSION ": 2->4 rewrite, game over log");
-    NSLog(@"[2048-auto] IL2CPP ready");
+    logAuto(@"[2048-auto] tweak " TWEAK_VERSION ": 2->4 rewrite, game over log");
     ready = YES;
     return YES;
 }
@@ -200,6 +218,68 @@ static BOOL initEngine(void) {
 typedef struct {
     int32_t x, y;
 } Vec2;
+
+// --- run log ---------------------------------------------------------------
+// Only the tweak's own lines are kept, and only in Documents/LCAC-2048.log:
+// nothing is printed to the console. The app's own chatter (ads, analytics
+// retries every few seconds) used to fill the file, so NSLog is not used at
+// all; every line goes through logAuto below.
+static int logFileFd = -2; // -2: not opened yet, -1: could not open
+static NSString *logPath;
+
+static NSString *documentsPath(NSString *name) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if ([paths count] == 0) return nil;
+    return [[paths objectAtIndex:0] stringByAppendingPathComponent:name];
+}
+
+static void logOpenFile(void) {
+    logPath = documentsPath(@"LCAC-2048.log");
+    if (!logPath) return;
+    NSFileManager *files = [NSFileManager defaultManager];
+    NSDictionary *attrs = [files attributesOfItemAtPath:logPath error:NULL];
+    // Only our own lines go in, so it stays small; start over past 1 MB.
+    if ([[attrs objectForKey:NSFileSize] unsignedLongLongValue] > 1ull * 1024 * 1024)
+        [files removeItemAtPath:logPath error:NULL];
+    logFileFd = open([logPath fileSystemRepresentation], O_WRONLY | O_CREAT | O_APPEND, 0644);
+}
+
+// A read runs every frame, so a message logged from one path can repeat
+// thousands of times. Identical consecutive lines are folded into one line per
+// 100 repeats, and the file as a whole stops at LOG_MAX_LINES as a backstop.
+#define LOG_MAX_LINES 20000
+
+static void logAuto(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *body = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    static NSString *lastBody;
+    static int repeats;
+    static int lines;
+    if (lastBody && [body isEqualToString:lastBody]) {
+        repeats++;
+        if (repeats % 100 != 0) return; // 100 回ごとに 1 行だけ残す
+        body = [body stringByAppendingFormat:@" (repeated %d times)", repeats + 1];
+    } else {
+        lastBody = body;
+        repeats = 0;
+    }
+    if (lines >= LOG_MAX_LINES) return;
+    if (++lines == LOG_MAX_LINES) body = [body stringByAppendingString:@" (log limit reached)"];
+    static NSDateFormatter *stamp;
+    if (!stamp) {
+        stamp = [[NSDateFormatter alloc] init];
+        // The device locale would print 午前/午後 and break every log parser.
+        [stamp setLocale:[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"]];
+        [stamp setDateFormat:@"yyyy-MM-dd HH:mm:ss.SSS"];
+    }
+    NSString *text = [NSString stringWithFormat:@"%@ %@\n", [stamp stringFromDate:[NSDate date]], body];
+    NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+    if (logFileFd == -2) logOpenFile();
+    if (logFileFd < 0) return;
+    (void)!write(logFileFd, [data bytes], [data length]);
+}
 
 // --- experimental: force every new tile to be a 4 ---------------------------
 // The game keeps the odds of a 4 somewhere. If a float field of GameManager or
@@ -345,7 +425,7 @@ static void dumpNames(C *c, int tag) {
     while ((m = class_methods(c, &it))) {
         unsigned long long e[2];
         encName(method_name(m), e);
-        if (diagEnabled) NSLog(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
+        if (diagEnabled) logAuto(@"[2048-auto] name %d %d %llx %llx", tag, (int)param_count(m), e[0], e[1]);
     }
 }
 
@@ -366,7 +446,7 @@ static BOOL containsWord(const char *n, const char *key) {
 
 static void logBoard(int tag, const int32_t *b) {
     if (!diagEnabled) return;
-    NSLog(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
+    logAuto(@"[2048-auto] board %d: %d %d %d %d | %d %d %d %d | %d %d %d %d | %d %d %d %d", tag, b[0], b[1],
           b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
 }
 
@@ -402,7 +482,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
         if (!tn || strcmp(tn, "System.Single")) continue;
         float v = 0;
         field_value(target, (F *)f, &v);
-        if (diagEnabled && containsFour(n)) NSLog(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
+        if (diagEnabled && containsFour(n)) logAuto(@"[2048-auto] %s.%s = %g (spawn candidate)", label, n ? n : "?", v);
         if (!fourOwner && containsFour(n) && v >= 0.0f && v <= 1.0f) {
             fourField = (F *)f;
             fourOwner = owner;
@@ -411,7 +491,7 @@ static void probeFields(C *c, void *obj, int owner, const char *label) {
                 float one = 1.0f;
                 field_set(target, (F *)f, &one);
             }
-            NSLog(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
+            logAuto(@"[2048-auto] spawn forced to 4 via %s.%s (%g -> 1)", label, n ? n : "?", v);
         }
     }
 }
@@ -498,8 +578,11 @@ static int restartLooked;
 // Set when a restart was asked for; the next readable board reports whether it
 // actually took effect.
 static int restartPending;
-// Consecutive reads that came back as PAUSE.
-static int pauseStreak;
+// When the game first came back as PAUSE. A pause is normal (game over screen,
+// achievement screen, ad) and must never be turned into a restart on its own:
+// doing that throws away a game that is still playable.
+static double pauseSince;
+static int pauseLogged;
 
 // The game over screen is not part of the model, so restarting the model leaves
 // it on screen. The scene tree says which object it is:
@@ -543,7 +626,7 @@ static void logFrame(const char *tag) {
     if (!fc) return;
     void *box = call(fc, NULL, NULL);
     if (failedInvocation || !box) return;
-    NSLog(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
+    logAuto(@"[2048-auto] frame %d %s", *(int32_t *)unbox(box), tag);
 }
 
 // The game over screen has a name of its own after all:
@@ -616,7 +699,7 @@ static void showHudBeside(void *loseScreen, const char *loseName) {
             void *p2[] = {&on};
             call(setActive, sgo, p2);
         }
-        NSLog(@"[2048-auto] hud shown");
+        logAuto(@"[2048-auto] hud shown");
     }
 }
 
@@ -642,7 +725,7 @@ static void hideLoseScreen(BOOL verbose) {
         if (verbose) {
             unsigned long long c[3] = {0, 0, 0};
             encManagedName(nm, c);
-            NSLog(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
+            logAuto(@"[2048-auto] lose screen %llx %llx %llx", c[0], c[1], c[2]);
         }
         uint8_t off = 0;
         void *p[] = {&off};
@@ -650,7 +733,7 @@ static void hideLoseScreen(BOOL verbose) {
         hidden++;
         showHudBeside(go, plain);
     }
-    if (hidden || verbose) NSLog(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
+    if (hidden || verbose) logAuto(@"[2048-auto] lose screen hidden (%d of %d objects)", hidden, total);
 }
 
 // A "play again" handler is quite often a coroutine: invoking it only builds an
@@ -707,7 +790,7 @@ static void findRestart(void *game) {
                 encName3(n, e);
                 const void *rt = method_ret ? method_ret(m) : NULL;
                 if (rt && type_get_name) encName3(type_get_name(rt), r);
-                NSLog(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
+                logAuto(@"[2048-auto] restart candidate %d %llx %llx %llx ret %llx %llx %llx", (int)param_count(m),
                       e[0], e[1], e[2], r[0], r[1], r[2]);
                 if (restartCount < 8) {
                     restartList[restartCount] = m;
@@ -720,6 +803,77 @@ static void findRestart(void *game) {
     }
 }
 
+// --- progress: how many moves were played, and when a big tile appeared -----
+// One move is one swipe the tweak actually sent. The counter resets when a new
+// game starts (a different Grid, or a board that is back to two tiles).
+static void *trackedGrid;
+static long long moveCount;
+static int bestTile;
+static long long progressAt;
+// 出現位置の分布。アプリの抽選が一様かどうかを実機で測るためのもの。
+// spawnCount = そのマスに出た回数、spawnChance = そのマスが空いていた回数。
+static int spawnCount[16];
+static int spawnChance[16];
+static int spawnMiss;
+
+static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
+    logAuto(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
+           "%d,%d,%d,%d",
+          tile, score, moves, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
+          b[13], b[14], b[15]);
+}
+
+// 500 手ごとの経過。8,192 を作ったあとにどこで崩れるかを見るための記録で、
+// milestone と同じ並び (1 行目が画面の一番下) で盤面を残す。
+static void logProgress(const int32_t *b, long long score, long long moves) {
+    logAuto(@"[2048-auto] progress moves=%lld score=%lld board %d,%d,%d,%d | %d,%d,%d,%d | "
+           "%d,%d,%d,%d | %d,%d,%d,%d",
+          moves, score, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12],
+          b[13], b[14], b[15]);
+}
+
+// Called on every read, so it must stay cheap: the board is already in memory
+// and the score is only read when a new tile shows up.
+static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
+    int tiles = 0, max = 0;
+    for (int i = 0; i < 16; i++) {
+        if (b[i]) tiles++;
+        if (b[i] > max) max = b[i];
+    }
+    if (grid != trackedGrid || (tiles <= 2 && moveCount > 0)) {
+        trackedGrid = grid;
+        moveCount = 0;
+        progressAt = 0;
+        for (int i = 0; i < 16; i++) spawnCount[i] = spawnChance[i] = 0;
+        spawnMiss = 0;
+        // 装着した時点で既に載っているタイルは「作った」わけではないので記録しない。
+        bestTile = max;
+        return;
+    }
+    if (moveCount >= progressAt + 500) {
+        progressAt = moveCount;
+        logProgress(b, readScore(mgr, game), moveCount);
+    }
+    if (max <= bestTile) return;
+    bestTile = max;
+    // 2048 以上で、2 の累乗のタイルが増えたときだけ記録する。
+    if (max < 2048 || (max & (max - 1)) != 0) return;
+    logMilestone(b, readScore(mgr, game), moveCount, max);
+}
+
+// Logged once per game so that the spawn distribution can be compared with the
+// uniform draw the solver assumes.
+static void logSpawnHistogram(void) {
+    logAuto(@"[2048-auto] spawns miss=%d count %d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d chance "
+           "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+          spawnMiss, spawnCount[0], spawnCount[1], spawnCount[2], spawnCount[3], spawnCount[4], spawnCount[5],
+          spawnCount[6], spawnCount[7], spawnCount[8], spawnCount[9], spawnCount[10], spawnCount[11],
+          spawnCount[12], spawnCount[13], spawnCount[14], spawnCount[15], spawnChance[0], spawnChance[1],
+          spawnChance[2], spawnChance[3], spawnChance[4], spawnChance[5], spawnChance[6], spawnChance[7],
+          spawnChance[8], spawnChance[9], spawnChance[10], spawnChance[11], spawnChance[12], spawnChance[13],
+          spawnChance[14], spawnChance[15]);
+}
+
 static void saveGameOver(const int32_t *b, long long score) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     if ([paths count] == 0) return;
@@ -729,8 +883,11 @@ static void saveGameOver(const int32_t *b, long long score) {
     [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss Z"];
     NSString *when = [formatter stringFromDate:[NSDate date]];
 
+    // The game's grid counts y from the bottom of the screen, so the first row
+    // written here is the bottom row of the board. tools/board_image.py turns
+    // the block back into a picture and flips it to match the screen.
     NSMutableString *text = [NSMutableString string];
-    [text appendFormat:@"%@ %@ score=%lld\n", when, TWEAK_VERSION_OBJC, score];
+    [text appendFormat:@"%@ %@ score=%lld moves=%lld\n", when, TWEAK_VERSION_OBJC, score, moveCount];
     for (int y = 0; y < 4; y++)
         [text appendFormat:@"%6d %6d %6d %6d\n", b[4 * y], b[4 * y + 1], b[4 * y + 2], b[4 * y + 3]];
     [text appendString:@"\n"];
@@ -753,13 +910,14 @@ static void noteGameOver(const int32_t *board, void *mgr, void *game) {
     if (gameOverLogged) return;
     gameOverLogged = 1;
     saveGameOver(board, readScore(mgr, game));
-    NSLog(@"[2048-auto] game over: board saved");
+    logSpawnHistogram();
+    logAuto(@"[2048-auto] game over: board saved");
 }
 
 // Called when the game has already stopped taking input: the board is still
 // readable there, and that is where the final position usually shows up.
 static void checkGameOverQuietly(void *mgr, void *game) {
-    if (gameOverLogged || !getGrid || !getCell) return;
+    if (!getGrid || !getCell) return;
     void *grid = call(getGrid, game, NULL);
     if (failedInvocation || !grid) return;
     int32_t b[16];
@@ -772,7 +930,20 @@ static void checkGameOverQuietly(void *mgr, void *game) {
             b[x + 4 * y] = *(int32_t *)unbox(box);
         }
     }
+    // A win screen can appear the instant a big tile is built, so the board has
+    // to count for the milestones here as well; otherwise that tile is lost from
+    // the log.
+    trackProgress(grid, b, mgr, game);
     noteGameOver(b, mgr, game);
+    // Long pause with a playable board: keep the position in the log and wait.
+    double now = [NSDate timeIntervalSinceReferenceDate];
+    if (pauseSince == 0) pauseSince = now;
+    if (!pauseLogged && now - pauseSince > 5.0) {
+        pauseLogged = 1;
+        logAuto(@"[2048-auto] paused 5 s; board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14],
+                b[15]);
+    }
 }
 
 // What draws the board, and where the cells live. Logged once so the next
@@ -788,7 +959,7 @@ static void probeDraw(void *grid) {
             if (cells && !failedInvocation) {
                 C *ac = object_class(cells);
                 C *ec = (ac && class_element) ? (C *)class_element(ac) : NULL;
-                NSLog(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
+                logAuto(@"[2048-auto] cells class %llx elem %llx", (unsigned long long)(uintptr_t)ac,
                       (unsigned long long)(uintptr_t)ec);
                 dumpNames(ec, 4);
             }
@@ -806,7 +977,7 @@ static void probeDraw(void *grid) {
                 break;
             }
     }
-    if (viewRefresh && diagEnabled) NSLog(@"[2048-auto] view redraw found");
+    if (viewRefresh && diagEnabled) logAuto(@"[2048-auto] view redraw found");
 }
 
 static void probeSpawn(void *mgr, void *grid) {
@@ -816,7 +987,7 @@ static void probeSpawn(void *mgr, void *grid) {
     probeFields(gridClass, grid, FIELD_GRID, "Grid");
     if (!fourOwner) {
         setCellMethod = findSetter();
-        if (diagEnabled) NSLog(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
+        if (diagEnabled) logAuto(@"[2048-auto] probe self %llx grid %llx setter %llx", (unsigned long long)(uintptr_t)&converting,
               (unsigned long long)(uintptr_t)grid, (unsigned long long)(uintptr_t)setCellMethod);
         // Prove the setter by writing a cell's own value back before using it.
         BOOL saved = failedInvocation;
@@ -835,10 +1006,10 @@ static void probeSpawn(void *mgr, void *grid) {
         if (ok) {
             converting = 1;
             solver_set_spawn_value(4);
-            NSLog(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
+            logAuto(@"[2048-auto] grid setter works; spawned 2s are turned into 4s");
             probeDraw(grid);
         } else {
-            NSLog(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
+            logAuto(@"[2048-auto] no four-chance field and no grid setter; spawns stay 2/4");
         }
     }
 }
@@ -853,7 +1024,7 @@ static void revertFour(void *mgr, void *grid) {
     }
     fourOwner = FIELD_NONE;
     solver_set_spawn_value(0);
-    NSLog(@"[2048-auto] a 2 spawned after forcing; reverting to 2/4");
+    logAuto(@"[2048-auto] a 2 spawned after forcing; reverting to 2/4");
 }
 
 // Returns status for UI; all calls occur on Unity's main thread. Unsupported modes do nothing.
@@ -874,17 +1045,14 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
     void *box = call(active, game, NULL);
     if (failedInvocation || !box || !*(uint8_t *)unbox(box)) {
         // The game stops taking input once it is over, and that is exactly when
-        // the last board has to be written out.
+        // the last board has to be written out. While the board can still move
+        // this is only a screen (achievement, ad, menu), so nothing is
+        // restarted: the player decides.
         checkGameOverQuietly(mgr, game);
-        // Still inactive a few seconds later while the board is not dead: the
-        // game is stuck rather than finished. Ask for the restart path.
-        if (!gameOverLogged && ++pauseStreak >= 12) {
-            pauseStreak = 0;
-            gameOverLogged = 1;
-            NSLog(@"[2048-auto] game stuck; asking for a restart");
-        }
         return @"PAUSE";
     }
+    pauseSince = 0;
+    pauseLogged = 0;
 
     void *grid = call(getGrid, game, NULL);
     if (failedInvocation) return @"G_EXC";
@@ -934,7 +1102,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             } else {
                 converting = 0;
                 solver_set_spawn_value(0);
-                NSLog(@"[2048-auto] grid write failed; spawns stay 2/4");
+                logAuto(@"[2048-auto] grid write failed; spawns stay 2/4");
             }
         }
         if (rewritten && viewRefresh) {
@@ -942,12 +1110,12 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (view && !failedInvocation) call(viewRefresh, view, NULL);
             if (!refreshLogged) {
                 refreshLogged = 1;
-                if (diagEnabled) NSLog(@"[2048-auto] view redraw called");
+                if (diagEnabled) logAuto(@"[2048-auto] view redraw called");
             }
         }
     }
-    pauseStreak = 0;
     for (int i = 0; i < 16; i++) out->board[i] = board[i];
+    trackProgress(grid, board, mgr, game);
     // The game may put the panel back a frame later, so sweep a couple of times.
     if (overlayHidesLeft > 0) {
         overlayHidesLeft--;
@@ -959,10 +1127,10 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
         int tiles = 0;
         for (int i = 0; i < 16; i++)
             if (board[i]) tiles++;
-        NSLog(@"[2048-auto] restart took effect: %d tiles", tiles);
+        logAuto(@"[2048-auto] restart took effect: %d tiles", tiles);
         if (restartGood < 0) {
             restartGood = restartSlot;
-            NSLog(@"[2048-auto] restart entry %d kept", restartGood + 1);
+            logAuto(@"[2048-auto] restart entry %d kept", restartGood + 1);
         }
         void *view = call(viewInstance, NULL, NULL);
         if (view && !failedInvocation && viewRefresh) call(viewRefresh, view, NULL);
@@ -991,6 +1159,14 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
                 at = i;
             } else if (out->board[i] != expected[i])
                 added = 99;
+        // 出現位置の集計: 予測盤面で空いていたマスが候補になる。
+        if (added == 1 && at >= 0) {
+            spawnCount[at]++;
+            for (int i = 0; i < 16; i++)
+                if (!expected[i]) spawnChance[i]++;
+        } else {
+            spawnMiss++;
+        }
         if (converting && diagLeft > 0) logBoard(2, expected);
         // A mismatch between the prediction and the board is no longer treated
         // as "the game ignores the rewrite": playing by hand or restarting a
@@ -1000,7 +1176,7 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
             if (out->board[at] == 2)
                 revertFour(mgr, grid);
             else if (out->board[at] == 4 && ++fourSpawns == 20)
-                NSLog(@"[2048-auto] 20 spawns, all 4s: forcing works");
+                logAuto(@"[2048-auto] 20 spawns, all 4s: forcing works");
         }
     }
 
@@ -1028,7 +1204,7 @@ NSString *Auto2048Restart(void) {
     if (failedInvocation) return @"NO";
     findRestart(game);
     if (!restartCount) {
-        NSLog(@"[2048-auto] restart method not found");
+        logAuto(@"[2048-auto] restart method not found");
         return @"NO";
     }
     int slot = restartGood >= 0 ? restartGood : (restartIndex++ % restartCount);
@@ -1046,9 +1222,9 @@ NSString *Auto2048Restart(void) {
             if (sc) {
                 void *par[] = {ret};
                 call(sc, mgr, par);
-                NSLog(@"[2048-auto] restart: coroutine started");
+                logAuto(@"[2048-auto] restart: coroutine started");
             } else {
-                NSLog(@"[2048-auto] restart: coroutine not startable");
+                logAuto(@"[2048-auto] restart: coroutine not startable");
             }
         }
     }
@@ -1056,7 +1232,7 @@ NSString *Auto2048Restart(void) {
     // The next game over is a different game, so allow it to be written out.
     gameOverLogged = 0;
     haveExpected = NO;
-    NSLog(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
+    logAuto(@"[2048-auto] restart attempt %d of %d", slot + 1, restartCount);
     return @"ON";
 }
 
@@ -1082,5 +1258,7 @@ NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {
     call(swipe, (void *)now.manager, par);
     memcpy(expected, after, sizeof(expected));
     haveExpected = YES;
-    return failedInvocation ? @"ERR" : @"ON";
+    if (failedInvocation) return @"ERR";
+    moveCount++;
+    return @"ON";
 }
