@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <string.h>
 #import "Engine.h"
 #import "Solver.h"
 
@@ -28,7 +29,11 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
 @property(nonatomic) CFTimeInterval lastRetry;
 @end
 
-@implementation Auto2048Controller
+@implementation Auto2048Controller {
+    // 直前の読みの盤面。これと同じ盤面が 2 回続くまで指さない。
+    int32_t _lastBoard[16];
+    BOOL _haveLastBoard;
+}
 
 + (instancetype)shared {
     static Auto2048Controller *v;
@@ -203,6 +208,16 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
         return;
     }
 
+    // 盤面が落ち着くまで待つ。前の読みと違うあいだは指さず、2 回続けて同じ盤面が
+    // 読めたら進む。指した直後は「まだ動いていない盤面」が返ることがあるため、
+    // 手を出したら _haveLastBoard を落として、必ず 1 回は変化を待つ。
+    if (!_haveLastBoard || memcmp(snapshot.board, _lastBoard, sizeof _lastBoard) != 0) {
+        memcpy(_lastBoard, snapshot.board, sizeof _lastBoard);
+        _haveLastBoard = YES;
+        Auto2048NoteSettleWait();
+        return;
+    }
+
     self.pending = YES;
     NSUInteger epoch = self.epoch;
     [self setDisplayStatus:@"THINK"];
@@ -216,6 +231,9 @@ static NSString *const Names[] = {@"x1", @"x2", @"x4", @"MAX"};
             // Re-read the live game before sending input; discard stale results.
             NSString *result = Auto2048Apply(&snapshot, direction);
             self.last = CACurrentMediaTime();
+            // 指した直後の読みは「まだ動いていない盤面」を返すことがある。次の 1 回は
+            // 必ず変化として扱い、盤面が変わって落ち着くまで次の手を出さない。
+            if ([result isEqualToString:@"ON"]) _haveLastBoard = NO;
             [self setDisplayStatus:result];
         });
     });

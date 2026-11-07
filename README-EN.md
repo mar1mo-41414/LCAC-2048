@@ -41,6 +41,10 @@ later); the previous best was 186,960 with an 8,192 tile (v3.9-3). Typical move 
 550 for 2,048, 1,050 for 4,096, 2,100 for 8,192 and 4,600 for 16,384.
 
 The simulation uses very few runs and says nothing about the success rate on a device.
+v3.10 triples the search budget once an 8,192 tile exists, so moves after that take about
+0.4 to 0.5 seconds (roughly 10 minutes longer per game; build with `BIG_TILE_BUDGET_MULT=1`
+to get v3.9 speed back). It also waits until the board reads the same twice before playing,
+so it never swipes mid-animation (slightly slower overall).
 The deeper endgame search makes each move about 2.5 times slower than in v3.8
 (60 to 75 ms per move on the host, longer near the end of a game).
 Only one device (the author's) has been tested; reports for other devices and versions are welcome in Issues.

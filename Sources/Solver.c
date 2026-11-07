@@ -73,10 +73,11 @@ int solver_move(const int32_t *in, int dir, int32_t *out) {
 #ifndef ENDGAME_EMPTY
 #define ENDGAME_EMPTY 4 // free cells at which the wider endgame search starts
 #endif
-// 8,192 を作ったあとの探索を広げる倍率。端末は 1 手 0.14 秒のうち 0.06 秒しか
-// 使っていないので、大きいタイルができてから余っている時間を使う。1 = 無効。
+// 8,192 を作ったあとの探索を広げる倍率。実機は 8,192 のあと中央 899 手で詰まり、
+// 2 枚目の 8,192 を作る途中で終わる。そこで支配的になるのは終盤の読みなので、
+// 大きいタイルができてから予算を使う。1 手あたり 0.4〜0.5 秒になる (1 = 無効)。
 #ifndef BIG_TILE_BUDGET_MULT
-#define BIG_TILE_BUDGET_MULT 1
+#define BIG_TILE_BUDGET_MULT 3
 #endif
 // log2 でのしきい値。13 = 8,192。
 #ifndef BIG_TILE_FROM

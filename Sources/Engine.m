@@ -11,8 +11,8 @@
 
 // Shown in the log and written to Documents/LCAC-2048_over.log. Kept in the
 // format string (not passed as an argument) so that os_log does not mask it.
-#define TWEAK_VERSION "v3.9"
-#define TWEAK_VERSION_OBJC @"v3.9"
+#define TWEAK_VERSION "v3.10"
+#define TWEAK_VERSION_OBJC @"v3.10"
 
 // 出現位置の実測分布 (Sources/SpawnBias.h) をソルバーの探索に使うか。0 で一様に戻る。
 // 実機で悪化したらここを 0 にして比べる。
@@ -827,6 +827,18 @@ static long long progressAt;
 static int spawnCount[16];
 static int spawnChance[16];
 static int spawnMiss;
+// 空きマス数ごとの集計。終盤 (空きが少ないとき) ほど偏りが強いかを確かめる。
+// 0 = 空き 4 以下、1 = 5〜8、2 = 9 以上。数は 16 マスぶんは持たず、外周と中央の合計だけ残す。
+static int spawnBandSpawns[3];
+static int spawnBandBorderSpawns[3];
+static int spawnBandBorderChance[3];
+static int spawnBandCenterSpawns[3];
+static int spawnBandCenterChance[3];
+// 同じ方向を続けて出した回数。ゲームに無視されたスワイプがあると増える。
+static int swipesSameDirection;
+static int lastSwipeDirection = -1;
+// 盤面が落ち着くのを待って見送った回数 (Controller から知らせる)。
+static int settleWaits;
 
 static void logMilestone(const int32_t *b, long long score, long long moves, int tile) {
     logAuto(@"[2048-auto] milestone tile=%d score=%lld moves=%lld board %d,%d,%d,%d | %d,%d,%d,%d | %d,%d,%d,%d | "
@@ -858,6 +870,13 @@ static void trackProgress(void *grid, const int32_t *b, void *mgr, void *game) {
         progressAt = 0;
         for (int i = 0; i < 16; i++) spawnCount[i] = spawnChance[i] = 0;
         spawnMiss = 0;
+        for (int b = 0; b < 3; b++) {
+            spawnBandSpawns[b] = spawnBandBorderSpawns[b] = spawnBandBorderChance[b] = 0;
+            spawnBandCenterSpawns[b] = spawnBandCenterChance[b] = 0;
+        }
+        swipesSameDirection = 0;
+        lastSwipeDirection = -1;
+        settleWaits = 0;
         // 装着した時点で既に載っているタイルは「作った」わけではないので記録しない。
         bestTile = max;
         return;
@@ -884,6 +903,34 @@ static void logSpawnHistogram(void) {
           spawnChance[2], spawnChance[3], spawnChance[4], spawnChance[5], spawnChance[6], spawnChance[7],
           spawnChance[8], spawnChance[9], spawnChance[10], spawnChance[11], spawnChance[12], spawnChance[13],
           spawnChance[14], spawnChance[15]);
+}
+
+// 空きマス数ごとに、中央 2x2 が外周よりどれだけ出にくいか (100 = 一様)。
+// 終盤で偏りが強まるなら、この数字が空きの少ない帯で小さくなる。
+static void logSpawnBands(void) {
+    static const char *names[3] = {"4-", "5-8", "9+"};
+    NSMutableString *line = [NSMutableString stringWithString:@"[2048-auto] spawns-band"];
+    for (int b = 0; b < 3; b++) {
+        int center = spawnBandCenterSpawns[b], border = spawnBandBorderSpawns[b];
+        double ratio = 0;
+        if (center > 0 && border > 0 && spawnBandCenterChance[b] > 0 && spawnBandBorderChance[b] > 0) {
+            double pc = (double)center / (double)spawnBandCenterChance[b];
+            double pb = (double)border / (double)spawnBandBorderChance[b];
+            ratio = 100.0 * pc / pb;
+        }
+        [line appendFormat:@" %s n=%d center=%d%%", names[b], spawnBandSpawns[b], (int)(ratio + 0.5)];
+    }
+    logAuto(@"%@", line);
+}
+
+// 手数と、無視されたスワイプ・アニメーション待ちの目安。1 ゲーム 1 行。
+static void logSwipeStats(void) {
+    logAuto(@"[2048-auto] swipes moves=%lld same-dir=%d settle=%d", moveCount, swipesSameDirection,
+            settleWaits);
+}
+
+void Auto2048NoteSettleWait(void) {
+    settleWaits++;
 }
 
 static void saveGameOver(const int32_t *b, long long score) {
@@ -923,6 +970,8 @@ static void noteGameOver(const int32_t *board, void *mgr, void *game) {
     gameOverLogged = 1;
     saveGameOver(board, readScore(mgr, game));
     logSpawnHistogram();
+    logSpawnBands();
+    logSwipeStats();
     logAuto(@"[2048-auto] game over: board saved");
 }
 
@@ -1173,9 +1222,27 @@ NSString *Auto2048Read(Auto2048Snapshot *out) {
                 added = 99;
         // 出現位置の集計: 予測盤面で空いていたマスが候補になる。
         if (added == 1 && at >= 0) {
-            spawnCount[at]++;
+            int empties = 0;
             for (int i = 0; i < 16; i++)
-                if (!expected[i]) spawnChance[i]++;
+                if (!expected[i]) empties++;
+            int band = empties <= 4 ? 0 : (empties <= 8 ? 1 : 2);
+            int x = at % 4, y = at / 4;
+            BOOL center = (x == 1 || x == 2) && (y == 1 || y == 2);
+            spawnCount[at]++;
+            spawnBandSpawns[band]++;
+            if (center)
+                spawnBandCenterSpawns[band]++;
+            else
+                spawnBandBorderSpawns[band]++;
+            for (int i = 0; i < 16; i++) {
+                if (expected[i]) continue;
+                spawnChance[i]++;
+                int ix = i % 4, iy = i / 4;
+                if ((ix == 1 || ix == 2) && (iy == 1 || iy == 2))
+                    spawnBandCenterChance[band]++;
+                else
+                    spawnBandBorderChance[band]++;
+            }
         } else {
             spawnMiss++;
         }
@@ -1271,6 +1338,8 @@ NSString *Auto2048Apply(const Auto2048Snapshot *previous, int dir) {
     memcpy(expected, after, sizeof(expected));
     haveExpected = YES;
     if (failedInvocation) return @"ERR";
+    if (dir == lastSwipeDirection) swipesSameDirection++;
+    lastSwipeDirection = dir;
     moveCount++;
     return @"ON";
 }

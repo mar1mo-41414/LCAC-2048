@@ -9,3 +9,5 @@ BOOL Auto2048GameOver(void);
 // Asks the game to start over ("play again"). Returns "ON" when the call was
 // made, "NO" when there was nothing to restart. Main thread only.
 NSString *Auto2048Restart(void);
+// 盤面がまだ落ち着いていないので 1 フレーム見送った、と知らせる (ログ用の計数)。
+void Auto2048NoteSettleWait(void);
