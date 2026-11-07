@@ -4,7 +4,9 @@
 //
 //   spawn  0 = 2 / 4 を 90 / 10 で出す、2 または 4 = その値だけ出す (既定 0)
 //   env    出現位置の出方。uniform = 空きマスから等確率、measured = 実機の実測分布
-//          (Sources/SpawnBias.h)。既定 uniform
+//          (Sources/SpawnBias.h)、sharp = その偏りを 2 倍に強めたもの、
+//          sharp3 / sharp5 = 3 倍 / 5 倍 (偏りが終盤でもっと強い場合の感度を見る)。
+//          既定 uniform
 //   model  ソルバーに渡す出現位置の仮定。uniform / measured。既定 uniform
 //
 // 実機のゲームは 4 固定で遊んでいるので、比較するときは spawn=4・env=measured を使う。
@@ -27,6 +29,7 @@ static uint32_t rng(void) {
 
 static int fixedValue;
 static int measuredEnvironment;
+static int biasScale = 1;
 
 // 空きマスに 1 個出す。measuredEnvironment のときは実測の重みで位置を選ぶ。
 static void spawn(int32_t b[16]) {
@@ -34,7 +37,12 @@ static void spawn(int32_t b[16]) {
     for (int i = 0; i < 16; i++) {
         if (b[i]) continue;
         cells[n] = i;
-        weight[n] = measuredEnvironment ? (int)kSpawnWeight[i] : 1;
+        int w = 1;
+        if (measuredEnvironment) {
+            w = 1000 + ((int)kSpawnWeight[i] - 1000) * biasScale;
+            if (w < 50) w = 50;
+        }
+        weight[n] = w;
         total += weight[n];
         n++;
     }
@@ -90,14 +98,17 @@ int main(int argc, char **argv) {
     int maxmoves = argc > 2 ? atoi(argv[2]) : 5000;
     fixedValue = argc > 3 ? atoi(argv[3]) : 0;
     if (fixedValue != 2 && fixedValue != 4) fixedValue = 0;
-    measuredEnvironment = argc > 4 && !strcmp(argv[4], "measured");
+    measuredEnvironment = argc > 4 && strcmp(argv[4], "uniform");
+    biasScale = argc > 4 && !strcmp(argv[4], "sharp") ? 2 : 1;
+    if (argc > 4 && !strcmp(argv[4], "sharp3")) biasScale = 3;
+    if (argc > 4 && !strcmp(argv[4], "sharp5")) biasScale = 5;
     int measuredModel = argc > 5 && !strcmp(argv[5], "measured");
 
     solver_set_spawn_value(fixedValue);
     if (measuredModel) solver_set_spawn_weights(kSpawnWeight);
 
-    printf("# games=%d moves=%d spawn=%d env=%s model=%s\n", games, maxmoves, fixedValue,
-           measuredEnvironment ? "measured" : "uniform", measuredModel ? "measured" : "uniform");
+    printf("# games=%d moves=%d spawn=%d env=%s scale=%d model=%s\n", games, maxmoves, fixedValue,
+           measuredEnvironment ? "measured" : "uniform", biasScale, measuredModel ? "measured" : "uniform");
     fflush(stdout);
 
     for (int g = 1; g <= games; g++) {

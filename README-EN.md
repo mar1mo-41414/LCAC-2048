@@ -24,7 +24,7 @@ It searches up to eight moves ahead late in a game and picks the next swipe. **R
 
 | Item | State |
 | --- | --- |
-| Real device (LiveContainer) | Auto-play confirmed with v3.5; **16,384 reached** (2026-11-06, v3.9, 218,856 / 4,800 moves), 8,192 several times |
+| Real device (LiveContainer) | Auto-play confirmed with v3.5; **16,384 reached** (2026-11-06, v3.9, 218,856 / 4,800 moves). Over one night of 119 games: 8,192 in 41%, 16,384 none |
 | 2048 version | 4.0.8 only (others untested) |
 | Game mode | Regular game (4×4) only |
 | Ads and popups | Not detected (turn AUTO off and on again by hand) |

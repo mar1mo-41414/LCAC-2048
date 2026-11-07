@@ -55,7 +55,9 @@ v2 ではこれにより、実機で管理オブジェクト取得時に出た `
 ```
 make test
 cc -O2 -I Sources tests/simulate.c Sources/Solver.c -lm -o build/simulate   # games maxmoves spawn
-./build/simulate 4 4000 4            # 4 ゲーム、4,000 手まで、出現は 4 固定
+./build/simulate 4 4000 4            # 4 ゲーム、4,000 手まで、出現は 4 固定 (出現位置は一様)
+./build/simulate 6 6000 4 measured          # 出現位置も実機の実測分布 (外周寄り) にする
+./build/simulate 6 6000 4 measured measured # 探索の仮定も実測分布に合わせる
 # 例: 終盤の深掘りを止めて比べる
 cc -O2 -I Sources -DENDGAME_BUDGET_MULT=1 tests/simulate.c Sources/Solver.c -lm -o /tmp/sim_flat
 ```
@@ -68,6 +70,10 @@ cc -O2 -I Sources -DENDGAME_BUDGET_MULT=1 tests/simulate.c Sources/Solver.c -lm 
   出現タイルを 4 に固定できたとき (下記) は、4 だけが出る前提で読みます。分岐が半分になるぶん、
   同じ計算量で 1〜2 手深く読めます。
 - 空きマスが 4 個以下なら全位置、5 個以上なら最大 4 位置 (`SAMPLE_CELLS`) を選んで確率を近似します。選択位置は盤面ハッシュにより回転させます。
+- どの空きマスに出すかは、**マスごとの出やすさ**で重み付けできます (`solver_set_spawn_weights`)。
+  実測値は `Sources/SpawnBias.h` にあり、2048 4.0.8 は外周に寄って出す (中央の 2×2 が 1 割ほど出にくい)。
+  `Engine.m` は起動時にこれを渡します (`USE_SPAWN_BIAS=0` で一様に戻る)。重みがあるときは、
+  空きマスの重みを累積して層化抽出し、層の中の位置は盤面ハッシュでずらします。
 - このため、読んでいる深さの全出現パターンを厳密に網羅するわけではありません。盤面・深さ・ノード種別を使う探索内キャッシュで再計算も抑えます。
 - 盤面評価は空きマス、数字の単調性、隣接する数字の差、合体候補、最大値の角配置、角からの蛇行順を考慮します。
   蛇行順は回転・反転した 8 向きから最良を選び、特定の角には固定しません
