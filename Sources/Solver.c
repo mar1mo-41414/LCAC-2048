@@ -112,6 +112,9 @@ typedef struct {
 // 0 = the game may spawn 2 or 4 (90% / 10%); 2 or 4 = only that value appears.
 static int32_t spawnValue;
 
+// 出現するマスの出やすさ。NULL なら一様 (空きマスから等確率)。
+static const int32_t *spawnWeights;
+
 void solver_set_spawn_value(int32_t v) {
     spawnValue = (v == 2 || v == 4) ? v : 0;
 }
@@ -120,13 +123,17 @@ int32_t solver_spawn_value(void) {
     return spawnValue;
 }
 
+void solver_set_spawn_weights(const int32_t *weights) {
+    spawnWeights = weights;
+}
+
 static uint64_t hashboard(const uint8_t b[16], int depth, int kind) {
     uint64_t h = 1469598103934665603ULL;
     for (int i = 0; i < 16; i++) {
         h ^= (uint64_t)b[i] + (uint64_t)(i * 37);
         h *= 1099511628211ULL;
     }
-    h ^= (unsigned)(depth * 2 + kind) ^ (unsigned)spawnValue * 8u;
+    h ^= (unsigned)(depth * 2 + kind) ^ (unsigned)spawnValue * 8u ^ (spawnWeights ? 0x5bd1e995u : 0u);
     h *= 1099511628211ULL;
     return h;
 }
@@ -314,9 +321,29 @@ static double chance(Search *s, uint8_t b[16], int depth) {
     // Board-derived rotation avoids always favoring a particular edge.
     uint64_t h = hashboard(b, depth, 1);
     int offset = (int)(h % (unsigned)n);
+    // 実測の出現分布があるときは、空きマスを等確率ではなく重み付きで層化抽出する。
+    // 層の中の位置は盤面ハッシュでずらし、毎回同じマスだけを見ないようにする。
+    int picked[SAMPLE_CELLS];
+    if (spawnWeights) {
+        uint32_t cum[16], total = 0;
+        for (int j = 0; j < n; j++) {
+            int32_t w = spawnWeights[freepos[j]];
+            total += (uint32_t)(w > 0 ? w : 1);
+            cum[j] = total;
+        }
+        uint32_t base = (uint32_t)(h % total);
+        for (int j = 0; j < samples; j++) {
+            uint32_t target = (uint32_t)(((uint64_t)base + ((uint64_t)total * (2 * j + 1)) / (2 * samples)) % total);
+            int k = 0;
+            while (cum[k] <= target) k++;
+            picked[j] = freepos[k];
+        }
+    } else {
+        for (int j = 0; j < samples; j++) picked[j] = freepos[(offset + (j * n) / samples) % n];
+    }
     double sum = 0;
     for (int j = 0; j < samples; j++) {
-        int at = freepos[(offset + (j * n) / samples) % n];
+        int at = picked[j];
         if (spawnValue) {
             b[at] = spawnValue == 4 ? 2 : 1;
             sum += player(s, b, depth);

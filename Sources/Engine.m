@@ -2,6 +2,7 @@
 #import <dlfcn.h>
 #import "Solver.h"
 #import "Engine.h"
+#import "SpawnBias.h"
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -12,6 +13,12 @@
 // format string (not passed as an argument) so that os_log does not mask it.
 #define TWEAK_VERSION "v3.9"
 #define TWEAK_VERSION_OBJC @"v3.9"
+
+// 出現位置の実測分布 (Sources/SpawnBias.h) をソルバーの探索に使うか。0 で一様に戻る。
+// 実機で悪化したらここを 0 にして比べる。
+#ifndef USE_SPAWN_BIAS
+#define USE_SPAWN_BIAS 1
+#endif
 
 // Opaque IL2CPP handles. Resolved with dlsym so the tweak stays independent of
 // any UnityFramework headers.
@@ -107,6 +114,11 @@ static void logVersionOnce(void) {
     if (done) return;
     done = 1;
     logAuto(@"[2048-auto] tweak " TWEAK_VERSION " starting");
+#if USE_SPAWN_BIAS
+    // 2048 4.0.8 は外周に寄って出す (中央の 2x2 が 1 割ほど出にくい)。
+    // 終盤はこの差が効くので、探索の空きマスの抽選を実測の重みに合わせる。
+    solver_set_spawn_weights(kSpawnWeight);
+#endif
 }
 
 // I_UNITY is transient (the IL2CPP domain comes up late), the rest are final:

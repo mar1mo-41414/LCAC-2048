@@ -37,6 +37,10 @@ BUILD_DIR = build
 SIM_GAMES ?= 3
 SIM_MOVES ?= 5000
 SIM_SPAWN ?= 0
+# 出現位置: uniform (空きマスから等確率) / measured (実機の実測分布)
+SIM_ENV ?= uniform
+# ソルバーに渡す出現位置の仮定: uniform / measured
+SIM_MODEL ?= uniform
 
 ifeq ($(wildcard $(THEOS_COMMON)),)
 all:
@@ -54,7 +58,7 @@ test-internal: $(BUILD_DIR)/internal_test
 	./$(BUILD_DIR)/internal_test
 
 simulate: $(BUILD_DIR)/simulate
-	./$(BUILD_DIR)/simulate $(SIM_GAMES) $(SIM_MOVES) $(SIM_SPAWN)
+	./$(BUILD_DIR)/simulate $(SIM_GAMES) $(SIM_MOVES) $(SIM_SPAWN) $(SIM_ENV) $(SIM_MODEL)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -63,7 +67,7 @@ $(BUILD_DIR):
 $(BUILD_DIR)/solver_test: tests/solver_test.c Sources/Solver.c Sources/Solver.h | $(BUILD_DIR)
 	$(CC) $(TEST_CFLAGS) -ISources tests/solver_test.c Sources/Solver.c -lm -o $@
 
-$(BUILD_DIR)/simulate: tests/simulate.c Sources/Solver.c Sources/Solver.h | $(BUILD_DIR)
+$(BUILD_DIR)/simulate: tests/simulate.c Sources/Solver.c Sources/Solver.h Sources/SpawnBias.h | $(BUILD_DIR)
 	$(CC) $(TEST_CFLAGS) -ISources tests/simulate.c Sources/Solver.c -lm -o $@
 
 # internal_test は Solver.c を include するので、テストファイルだけをコンパイルする。
